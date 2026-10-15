@@ -12,7 +12,13 @@ The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` /
 
 **Trainer & bag tab.** Edit your trainer name, gender, Trainer/Secret ID and play time; by default, Pokémon you caught are updated to the new OT so they keep obeying. Edit money (up to ¥999,999), Game Corner coins and Battle Points (up to 9,999), rename all 26 PC boxes, and choose which items you own. Elite Redux stores the bag as one "owned" flag per item with unlimited uses, so items are toggled rather than counted; search, category and owned/missing filters plus bulk add/remove are available.
 
-**All option-menu settings.** Besides difficulty, level caps, randomizers and the other run rules, Game settings covers text speed, HP bar speed, battle animations, battle style, sound, button mode, window frame, battle UI skin, damage numbers, nickname prompts, player AI, individual colours and double battles.
+**Progress tab.** Mark any species as unseen, seen or caught in the Pokédex (caught always implies seen), with search, filters and bulk actions; it changes Pokédex records only. Edit common game statistics (steps, battles, catches, eggs hatched and more), turn the nuzlocke first-encounter rule on or off and clear its route and caught-location tracking, and move the in-game clock forward or back. The roaming Pokémon is shown read-only, because its location exists only while the game runs.
+
+**PC and points.** Choose each box's wallpaper (the 16 standard designs) and which box the PC opens on, and edit the trainer-card Battle Points total alongside spendable BP.
+
+**Save layout notes.** Elite Redux 2.65.4 stores some data at different positions from the current Elite Redux source (for example, berry trees use 8 bytes each), so every newer field was located against a real 2.65.4 save: game stats match the save counter and step count, every caught Pokédex entry is also seen, the roamer sits immediately before the Pokédex, and the nuzlocke data ends with the start-menu item count. Day Care, mass outbreaks, side quests, berry trees, Pokéblocks, decorations, mail and Battle Frontier streaks are deliberately not editable: their 2.65.4 positions could not be confirmed, or the game stores them in a way that editing could corrupt neighbouring data.
+
+**All option-menu settings.** Besides difficulty, level caps, randomizers and the other run rules, Game settings covers battle speed, overworld speed, text speed, HP bar speed, battle animations, battle style, sound, button mode, window frame, battle UI skin, damage numbers, nickname prompts, player AI, individual colours and double battles.
 
 A Pokémon record the catalog does not recognise no longer prevents a save from opening: it is counted in the status banner and locked, while everything else stays editable.
 

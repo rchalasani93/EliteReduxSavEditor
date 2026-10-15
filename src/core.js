@@ -26,6 +26,16 @@
   };
   // SaveBlock1 starts at logical offset 2*DATA. Elite Redux keeps the bag as one "owned" bit per item ID.
   const SB1 = 2 * DATA, PARTY_COUNT = SB1 + 0x234, MONEY = SB1 + 0x400, COINS = SB1 + 0x404, ITEM_FLAGS = SB1 + 0x40a, ITEM_SLOTS = 2048;
+  // ---- Offsets verified against an Elite Redux 2.65.4 save. 2.65.4 differs from the current source
+  // (its berry trees are 8 bytes and extra SaveBlock1/2 data shifts later fields), so each one was anchored to
+  // recognisable data: game stats = save counter + steps, Pokédex caught ⊆ seen and matching owned species,
+  // roamer species directly before the Pokédex, quest/nuzlocke tail ending with the start-menu item count.
+  const VARS = SB1 + 0x1c78, GAME_STATS = SB1 + 0x1e78, ROAMER = SB1 + 0x2e40, DEX_SEEN = SB1 + 0x2e54, DEX_CAUGHT = SB1 + 0x2f10, DEX_BYTES = 188;
+  const CLOCK_OFFSET = 0x24, CARD_BATTLE_POINTS = 0xc16, NUZLOCKE_CAPTURES = 0xc9c, ROUTE_MASKS = 0xca0, CAUGHT_ON_LOCATION = 0xcb9;
+  const STORAGE = PC_START - 4, WALLPAPERS = STORAGE + 0x9f5e, WALLPAPER_COUNT = 16;
+  const VAR_IDS = {battleSpeed: 0xe1, overworldSpeed: 0xe3};
+  const GAME_STATS_EDITABLE = {0:'Times saved',3:'Berries planted',5:'Steps taken',7:'Total battles',8:'Wild battles',9:'Trainer battles',11:'Pokémon caught',12:'Pokémon caught fishing',13:'Eggs hatched',14:'Pokémon evolved',15:'Pokémon Center visits',16:'Rested at home',18:'Times used Cut',19:'Times used Rock Smash',21:'Pokémon trades',26:'Times used Splash',27:'Times used Struggle',38:'Purchases made',39:'Times used Itemfinder',40:'Times rained on',41:'Pokédex checks',43:'Ledges jumped',44:'TV watched',45:'Clock checks',47:'Day Care uses',52:'DexNav scans'};
+  const MAX_STAT = 999999999;
   // SaveBlock2.frontier.battlePoints: the Battle Frontier block ends right where the option bits at 0xC88 begin.
   const BATTLE_POINTS = 0xc14, MAX_BATTLE_POINTS = 9999;
   const BOX_NAMES = PC_START + 780 * 52, MAX_MONEY = 999999, MAX_COINS = 9999;
@@ -138,7 +148,8 @@
     box(box) {return Array.from({length:30},(_,slot)=>this.mon({kind:'box',box,slot}));}
     boxName(box) {return decode(this.read(PC_START+780*52+box*9,9))||`Box ${box+1}`;}
     trainer() {const a=this.read(0,20),v=new DataView(a.buffer);return {name:decode(a.subarray(0,8)),id:v.getUint32(10,true),hours:v.getUint16(14,true),minutes:a[16]};}
-    options() {const a=this.read(0xc88,6),v=new DataView(a.buffer),o={};for(const [k,[off,s,w]]of Object.entries(OPTIONS))o[k]=(v.getUint16(off-0xc88,true)>>>s)&((1<<w)-1);return o;}
+    options() {const a=this.read(0xc88,6),v=new DataView(a.buffer),o={};for(const [k,[off,s,w]]of Object.entries(OPTIONS))o[k]=(v.getUint16(off-0xc88,true)>>>s)&((1<<w)-1);for(const [k,id]of Object.entries(VAR_IDS))o[k]=Math.min(3,this.getVar(id));return o;}
+    getVar(id) {return new DataView(this.read(VARS+id*2,2).buffer).getUint16(0,true);}
     flag(id) {const x=3*DATA+0x984+(id>>>3);return (this.read(x,1)[0]>>>(id&7))&1;}
     badge() {if(this.flag(2885))return 9;for(let i=8;i>=1;i--)if(this.flag(2888+i))return i;return 0;}
     cap() {const opts=this.options();if(opts.levelCaps===3)return 100;return [[20,28,44,55,65,80,90,100,100,100],[18,25,40,50,55,70,85,92,95,100],[16,23,36,45,50,55,60,70,80,100]][opts.levelCaps][this.badge()];}
@@ -191,7 +202,7 @@
       });
     }
     heal(ref) {if(ref.kind!=='party')return;this.transact('Heal Pokémon',()=>{this.refreshParty(ref);const a=this.read(this.address(ref),76),v=new DataView(a.buffer),m=readMon(a,ref);v.setUint32(56,0,true);v.setUint16(62,m.stats[0],true);m.moves.forEach((id,i)=>a[52+i]=maxPP(this.catalog.moves[id]));this.write(this.address(ref),a);});}
-    editOptions(patch) {this.transact('Update game settings',()=>{const before=this.options();for(const [k,n]of Object.entries(patch)){const f=OPTIONS[k];if(!f)throw new Error('Unknown setting');const[off,s,w,max]=f;integer(n,0,max,k);const a=this.read(off,2),v=new DataView(a.buffer);const mask=((1<<w)-1)<<s;v.setUint16(0,(v.getUint16(0,true)&~mask)|(n<<s),true);this.write(off,a);}if(['enableEvs','difficulty'].some(k=>k in patch&&patch[k]!==before[k]))for(const m of this.party())if(this.isValid(m))this.refreshParty(m.ref);});}
+    editOptions(patch) {this.transact('Update game settings',()=>{const before=this.options();for(const [k,n]of Object.entries(patch)){if(k in VAR_IDS){integer(n,0,3,k);if(n!==before[k]){const a=new Uint8Array(2);new DataView(a.buffer).setUint16(0,n,true);this.write(VARS+VAR_IDS[k]*2,a);}continue;}const f=OPTIONS[k];if(!f)throw new Error('Unknown setting');const[off,s,w,max]=f;integer(n,0,max,k);const a=this.read(off,2),v=new DataView(a.buffer);const mask=((1<<w)-1)<<s;v.setUint16(0,(v.getUint16(0,true)&~mask)|(n<<s),true);this.write(off,a);}if(['enableEvs','difficulty'].some(k=>k in patch&&patch[k]!==before[k]))for(const m of this.party())if(this.isValid(m))this.refreshParty(m.ref);});}
     // ---- Validity helpers -------------------------------------------------------------------
     isValid(m) {try{this.assertMon(m);return true;}catch{return false;}}
     invalidSlots() {const out=[];for(const m of this.party())if(!this.isValid(m))out.push(m.ref);for(let b=0;b<26;b++)for(const m of this.box(b))if(m.species&&!this.isValid(m))out.push(m.ref);return out;}
@@ -219,6 +230,43 @@
     editBattlePoints(value) {
       if(!this.battlePoints().supported)throw new Error('Battle Points could not be read safely from this save.');
       this.transact('Edit Battle Points',()=>{const a=new Uint8Array(2);new DataView(a.buffer).setUint16(0,integer(value,0,MAX_BATTLE_POINTS,'Battle Points'),true);this.write(BATTLE_POINTS,a);});
+    }
+    // ---- Pokédex -------------------------------------------------------------------------------
+    // Bit n of each array is national dex number n+1 (verified: every caught species in the test save is also seen).
+    pokedex() {const seen=this.read(DEX_SEEN,DEX_BYTES),caught=this.read(DEX_CAUGHT,DEX_BYTES),bit=(a,n)=>(a[(n-1)>>>3]>>>((n-1)&7))&1;return {seen:n=>bit(seen,n),caught:n=>bit(caught,n),max:DEX_BYTES*8,counts:()=>{let s=0,c=0;for(let n=1;n<=DEX_BYTES*8;n++){s+=bit(seen,n);c+=bit(caught,n);}return {seen:s,caught:c};}};}
+    editPokedex(changes) {
+      this.transact('Edit Pokédex',()=>{const seen=this.read(DEX_SEEN,DEX_BYTES),caught=this.read(DEX_CAUGHT,DEX_BYTES);
+        const set=(a,n,v)=>{const i=(n-1)>>>3,m=1<<((n-1)&7);if(v)a[i]|=m;else a[i]&=~m;};
+        for(const [key,state]of Object.entries(changes)){const n=integer(+key,1,DEX_BYTES*8,'Pokédex number');
+          if(!['none','seen','caught'].includes(state))throw new Error('Pokédex state must be none, seen or caught.');
+          set(seen,n,state!=='none');set(caught,n,state==='caught');}
+        this.write(DEX_SEEN,seen);this.write(DEX_CAUGHT,caught);});
+    }
+    // ---- Game stats, card BP, wallpapers, nuzlocke, roamer, clock ------------------------------
+    gameStats() {const a=this.read(GAME_STATS,64*4),v=new DataView(a.buffer),key=this.encryptionKey();return Object.fromEntries(Object.keys(GAME_STATS_EDITABLE).map(id=>[id,(v.getUint32(id*4,true)^key)>>>0]));}
+    editGameStats(patch) {this.transact('Edit game stats',()=>{const key=this.encryptionKey();for(const [id,n]of Object.entries(patch)){if(!(id in GAME_STATS_EDITABLE))throw new Error('That stat cannot be edited.');const a=new Uint8Array(4);new DataView(a.buffer).setUint32(0,(integer(n,0,MAX_STAT,GAME_STATS_EDITABLE[id])^key)>>>0,true);this.write(GAME_STATS+id*4,a);}});}
+    editCardBattlePoints(value) {if(!this.battlePoints().supported)throw new Error('Battle Points could not be read safely from this save.');this.transact('Edit trainer card BP',()=>{const a=new Uint8Array(2);new DataView(a.buffer).setUint16(0,integer(value,0,MAX_BATTLE_POINTS,'Trainer card BP'),true);this.write(CARD_BATTLE_POINTS,a);});}
+    storage() {return {currentBox:this.read(STORAGE,1)[0],wallpapers:Array.from(this.read(WALLPAPERS,26))};}
+    editStorage({currentBox,wallpapers}={}) {
+      this.transact('Edit PC boxes',()=>{if(currentBox!==undefined)this.write(STORAGE,[integer(currentBox,0,25,'Starting box')]);
+        if(wallpapers){if(wallpapers.length!==26)throw new Error('Expected 26 wallpapers.');const cur=this.storage().wallpapers;this.write(WALLPAPERS,wallpapers.map((w,i)=>w===cur[i]?w:integer(w,0,WALLPAPER_COUNT-1,`Box ${i+1} wallpaper`)));}});
+    }
+    nuzlocke() {const masks=new DataView(this.read(ROUTE_MASKS,20).buffer);let routes=0;for(let i=0;i<5;i++){let m=masks.getUint32(i*4,true);while(m){routes+=m&1;m>>>=1;}}let locations=0;for(const b of this.read(CAUGHT_ON_LOCATION,32))for(let x=b;x;x>>=1)locations+=x&1;return {captureRule:this.read(NUZLOCKE_CAPTURES,1)[0]&1,routes,locations};}
+    editNuzlocke({captureRule,clearRoutes=false,clearLocations=false}={}) {
+      this.transact('Edit nuzlocke data',()=>{
+        if(captureRule!==undefined){const a=this.read(NUZLOCKE_CAPTURES,1);a[0]=(a[0]&~1)|integer(captureRule,0,1,'Nuzlocke capture rule');this.write(NUZLOCKE_CAPTURES,a);}
+        if(clearRoutes)this.write(ROUTE_MASKS,new Uint8Array(20));
+        if(clearLocations)this.write(CAUGHT_ON_LOCATION,new Uint8Array(32));});
+    }
+    roamer() {const a=this.read(ROAMER,20),v=new DataView(a.buffer);return {species:v.getUint16(8,true),hp:v.getUint16(10,true),level:a[12],status:a[13],active:!!a[19]};}
+    // gLocalTime = RTC - localTimeOffset, normalised so hours/minutes/seconds stay in range (days may be negative).
+    clockOffset() {const a=this.read(CLOCK_OFFSET,6),v=new DataView(a.buffer);return {days:v.getInt16(0,true),hours:v.getInt8(2),minutes:v.getInt8(3),seconds:v.getInt8(4)};}
+    shiftClock(minutes) {
+      integer(minutes,-525600,525600,'Clock shift');
+      this.transact(`Shift in-game clock ${minutes>=0?'forward':'back'}`,()=>{const o=this.clockOffset();
+        let total=((o.days*24+o.hours)*60+o.minutes)-minutes;const days=Math.floor(total/1440);total-=days*1440;
+        if(days<-32768||days>32767)throw new Error('Clock offset out of range.');
+        const a=this.read(CLOCK_OFFSET,6),v=new DataView(a.buffer);v.setInt16(0,days,true);v.setInt8(2,Math.floor(total/60));v.setInt8(3,total%60);this.write(CLOCK_OFFSET,a);});
     }
     editMoney(patch) {
       const cur=this.money();if(!cur.supported)throw new Error('Money could not be read safely from this save.');
@@ -394,5 +442,5 @@
     for(let box=0;box<26;box++)put(PC_START+780*52+box*9,encode('Box '+(box+1),9));
     for(const off of locations.values())v.setUint16(off+DATA+2,checksum(bytes.subarray(off,off+DATA)),true);return bytes;
   }
-  return {Save,demo,randomInt,toShowdown,parseShowdown,baseSpeciesName,sanitizeName,STATUS,LANGUAGES,readMon,checksum,decode,encode,calcStats,expForLevel,levelForExp,maxPP,NATURES,SECTION,DATA,SIGNATURE,PARTY_START,PC_START,OPTIONS};
+  return {Save,demo,randomInt,GAME_STATS_EDITABLE,WALLPAPER_COUNT,toShowdown,parseShowdown,baseSpeciesName,sanitizeName,STATUS,LANGUAGES,readMon,checksum,decode,encode,calcStats,expForLevel,levelForExp,maxPP,NATURES,SECTION,DATA,SIGNATURE,PARTY_START,PC_START,OPTIONS};
 });
