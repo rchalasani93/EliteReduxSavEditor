@@ -46,8 +46,6 @@ The dev server listens on `http://127.0.0.1:4173`. Run the build before starting
 
 The repository keeps the application in `src/`, build and maintenance scripts in `scripts/`, and checks in `tests/`. The bundled `src/catalog.json` and `src/icons.json` are required application data. Temporary research files, screenshots, reference-page copies, and deployment archives are not needed to build or run the editor.
 
-`.openai/hosting.json` connects this checkout to its existing ChatGPT Site and declares `dist/` as the hosting directory. It contains the Site project ID and hosting settings, not API keys. GitHub and the offline editor do not require it; it is retained for continued ChatGPT Sites deployments. Removing it does not shut down an already deployed site, but removes this checkout's link to that deployment.
-
 The source parser and writer are independently implemented. Public game data and format definitions come from [Elite Redux source](https://github.com/Elite-Redux/eliteredux-source), its [configuration](https://github.com/Elite-Redux/er-config), and [ER Nextdex](https://github.com/ForwardFeed/ER-nextdex). The [reference editor](https://pokemon-elite-redux--srm-editor.pages.dev/) informed the feature scope.
 
 Binary and browser verification can establish export integrity; in-emulator verification requires the matching ROM and emulator. No matching ROM is included with this project.
@@ -62,7 +60,7 @@ The included `.github/workflows/pages.yml` runs the tests and builds the editor 
 4. Open **Actions → Deploy editor to GitHub Pages**. If the first run started before Pages was enabled, rerun it or use **Run workflow**.
 5. After the deployment succeeds, open the URL shown in **Settings → Pages**, normally `https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`.
 
-The editor embeds its assets, so it works under the repository URL without a custom base path. Leave `dist/` and `Redux Save Studio.html` out of Git; the workflow generates them. The `.openai/` configuration is not used by this workflow and is not included in the published website.
+The editor embeds its assets, so it works under the repository URL without a custom base path. Leave `dist/` and `Redux Save Studio.html` out of Git; the workflow generates them.
 
 GitHub's [publishing-source instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) and [custom-workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) describe this deployment method.
 
