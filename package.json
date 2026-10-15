@@ -5,6 +5,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "test": "node --test tests/*.test.cjs",
-    "start": "node scripts/serve.cjs"
+    "start": "node scripts/serve.cjs",
+    "format": "npx --yes prettier@3.3.3 --write src scripts tests"
   }
 }

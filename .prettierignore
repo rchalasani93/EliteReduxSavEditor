@@ -1,0 +1,7 @@
+dist/
+Redux Save Studio.html
+src/catalog.json
+src/icons.json
+scripts/sprite-hashes.json
+test-output/
+sav/

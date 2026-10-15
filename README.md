@@ -60,7 +60,7 @@ npm test
 npm start
 ```
 
-The dev server listens on `http://127.0.0.1:4173`. Run the build before starting it. Build produces `dist/index.html` and the standalone editor; both are generated files and are excluded from Git. No dependency installation or network connection is required to build from the included source and data. To run additional integration checks on a real save, set `ER_SAMPLE_FILE` to its absolute path before running tests. Real save files, ROMs, research downloads, and test exports are excluded from Git and deployment.
+Code style is enforced with Prettier (`.prettierrc.json`); run `npm run format` before committing. The dev server listens on `http://127.0.0.1:4173`. Run the build before starting it. Build produces `dist/index.html` and the standalone editor; both are generated files and are excluded from Git. No dependency installation or network connection is required to build from the included source and data. To run additional integration checks on a real save, set `ER_SAMPLE_FILE` to its absolute path before running tests. Real save files, ROMs, research downloads, and test exports are excluded from Git and deployment.
 
 The repository keeps the application in `src/`, build and maintenance scripts in `scripts/`, and checks in `tests/`. The bundled `src/catalog.json` and `src/icons.json` are required application data. Temporary research files, screenshots, reference-page copies, and deployment archives are not needed to build or run the editor.
 

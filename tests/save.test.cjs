@@ -1,18 +1,228 @@
-const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
-const core=require('../src/core.js'),rng=require('../src/rng.js'),catalog=require('../src/catalog.json');
-const {fixture}=require('./fixture.cjs');
-const party={kind:'party',slot:0};
-test('modern rotating 20-section save round trips without any changed byte',()=>{const input=fixture(),s=new core.Save(input,catalog);assert.deepEqual(s.export(),input);assert.equal(s.trainer().name,'Tester');assert.equal(s.party()[0].nickname,'Mewtwo');assert.equal(s.report().length,20);assert.equal(s.options().abilityRng,1);});
-test('packed moves, nature, held item and shiny fields preserve adjacent bits',()=>{const s=new core.Save(fixture(),catalog),before=s.mon(party);s.editMon(party,{move1:1003,pp:[16,24,24,32],heldItem:310,shiny:2,nature:13});const m=s.mon(party);assert.equal(m.move1,1003);assert.equal(m.heldItem,310);assert.equal(m.shiny,2);assert.equal(m.nature,13);assert.equal(m.experience,before.experience);assert.equal(m.egg,before.egg);assert.equal(m.language,before.language);assert.equal(m.metLevel,before.metLevel);assert.equal(m.abilitySlot,before.abilitySlot);assert.deepEqual(m.evs,before.evs);assert.equal(new core.Save(s.export(),catalog).mon(party).move1,1003);});
-test('level edits update experience, cache and stats; maximum PP is retained',()=>{const s=new core.Save(fixture(),catalog);s.editMon(party,{level:50,nature:15});const m=s.mon(party);assert.equal(m.experience,156250);assert.equal(m.cachedLevel,50);assert.deepEqual(m.stats,[181,117,110,191,110,150]);assert.equal(m.hp,181);assert.deepEqual(m.pp,[24,24,24,32]);});
-test('unchanged form fields preserve partial-level experience and cached stats',()=>{const s=new core.Save(fixture(),catalog);const a=s.read(s.address(party),76),v=new DataView(a.buffer);v.setUint32(8,(10007<<11)|85,true);s.write(s.address(party),a);s.rechecksum();const before=s.bytes.slice();s.editMon(party,{nickname:'Mewtwo',level:20,species:150,nature:15,evs:[0,0,0,0,0,0],speedDown:0});assert.deepEqual(s.bytes,before);s.editOptions(s.options());assert.deepEqual(s.bytes,before);});
-test('cross-section PC records write both sections and retain every unrelated byte',()=>{const s=new core.Save(fixture(),catalog),before=s.bytes.slice(),ref={kind:'box',box:2,slot:18},addr=s.address(ref);s.editMon(ref,{pid:123,nickname:'Box-Mon',level:60});const after=s.export(),allowed=new Set();for(let i=0;i<52;i++)allowed.add(s.physical(addr+i));for(const sid of [8,9]){const off=s.sections.get(sid).offset;allowed.add(off+4086);allowed.add(off+4087);}for(let i=0;i<after.length;i++)if(after[i]!==before[i])assert.ok(allowed.has(i),`Unexpected modified byte ${i}`);assert.equal(new core.Save(after,catalog).mon(ref).nickname,'Box-Mon');assert.equal(s.report().every(s=>s.valid),true);assert.deepEqual(after.subarray(20*4096),before.subarray(20*4096));});
-test('settings preserve reserved bits; undo and redo reproduce byte buffers',()=>{const s=new core.Save(fixture(),catalog),before=s.bytes.slice(),off=s.physical(0xc8a),reserved=s.bytes[off+1]&0xfe;s.editOptions({typeRng:1,abilityRng:0,permMega:0,difficulty:2});const after=s.bytes.slice();assert.equal(s.options().typeRng,1);assert.equal(s.options().abilityRng,0);assert.equal(s.options().permMega,0);assert.equal(s.bytes[off+1]&0xfe,reserved);s.undo();assert.deepEqual(s.bytes,before);s.redo();assert.deepEqual(s.bytes,after);s.reset();assert.deepEqual(s.bytes,before);});
-test('bad checksums, missing sectors, duplicate sections, mixed counters, old sizes fail safely',()=>{let b=fixture();b[0]^=1;const damaged=new core.Save(b,catalog);assert.equal(damaged.damaged.length,1);assert.throws(()=>damaged.editMon(party,{pid:10}),/checksum/);assert.throws(()=>damaged.export(),/damaged/);b=fixture();new DataView(b.buffer).setUint32(4088,0,true);assert.throws(()=>new core.Save(b,catalog),/19\/20/);b=fixture();new DataView(b.buffer).setUint16(4096+4084,16,true);assert.throws(()=>new core.Save(b,catalog),/Duplicate/);b=fixture();new DataView(b.buffer).setUint32(4092,5,true);assert.throws(()=>new core.Save(b,catalog),/different counters/);assert.throws(()=>new core.Save(new Uint8Array(65536),catalog),/128 KB/);});
-test('invalid edits roll back atomically and names support game punctuation',()=>{const s=new core.Save(fixture(),catalog),before=s.bytes.slice();assert.throws(()=>s.editMon(party,{evs:[252,252,252,0,0,0]}),/510/);assert.deepEqual(s.bytes,before);assert.throws(()=>s.editMon(party,{nature:31}),/nature/);assert.deepEqual(s.bytes,before);assert.throws(()=>s.editMon(party,{nickname:'😀'}),/encode/);s.editMon(party,{nickname:'Test-♀!'});assert.equal(s.mon(party).nickname,'Test-♀!');});
-test('native uint32 LCG matches independent BigInt calculation and inverse',()=>{for(let i=0;i<10000;i++){const n=(Math.imul(i,2654435761)+0x121ec839)>>>0;const independent=Number((1103515245n*BigInt(n)+24691n)&0xffffffffn);assert.equal(rng.step(n),independent);assert.equal(rng.inverse(rng.step(n)),n);}});
-test('fixed sources survive and rejected randomizer outputs reroll',()=>{const config={...catalog.config,modulus:1033};assert.equal(rng.randomize(25,150,99,true,config),25);assert.equal(rng.randomize(72,2633,0x121ec839,true,config),810);assert.equal(rng.randomize(72,2633,0x121ec839,false,config),72);assert.equal(catalog.config.modulus,1062);assert.equal(catalog.config.banned.length,38);assert.deepEqual(catalog.species[150].types,[14,14]);});
-test('inverse search returns only forward-verified combinations and respects gender',async()=>{const species=catalog.species[359],options={abilityRng:1,innateRng:1,typeRng:1},pid=0x38f74699;const expected=rng.evaluate(species,pid,0,options,catalog.config);const targets=[expected.ability,null,null,null];const result=await rng.search({species,options,config:catalog.config,targets,lockedSlot:null,keepGender:true,pid,limit:12});assert.equal(result.answers.length,12);for(const answer of result.answers){assert.equal(rng.evaluate(species,answer.pid,answer.slot,options,catalog.config).ability,targets[0]);assert.equal(rng.gender(species,answer.pid),rng.gender(species,pid));assert.ok(answer.types.every(x=>x!==9&&x<19));}});
-test('search rejects a banned target and unavailable fixed fields without scanning',async()=>{const species=catalog.species[150];const result=await rng.search({species,options:{abilityRng:1,innateRng:1},config:catalog.config,targets:[25,null,null,null],lockedSlot:null,pid:0});assert.equal(result.answers.length,0);assert.equal(result.checked,0);});
-if(process.env.ER_SAMPLE_FILE)test('provided real save: edit, export, re-import, undo, and preserve original',()=>{const input=fs.readFileSync(process.env.ER_SAMPLE_FILE),s=new core.Save(input,catalog);assert.ok(s.partyCount>=1&&s.partyCount<=6);assert.ok(s.mon({kind:'box',box:2,slot:1}).species,'This check edits box 3 slot 2, so it needs a Pokémon there.');assert.deepEqual(Buffer.from(s.export()),input);s.editMon(party,{level:50,evs:[4,0,0,252,0,252],nickname:'Test-Mewtwo',move1:1003,pp:[16,24,24,32]});s.editMon({kind:'box',box:2,slot:1},{level:60,nickname:'Test-PC'});s.editOptions({typeRng:1,permMega:0,levelCaps:3});const output=s.export(),again=new core.Save(output,catalog);assert.equal(again.mon(party).level,50);assert.equal(again.mon(party).move1,1003);assert.equal(again.mon({kind:'box',box:2,slot:1}).nickname,'Test-PC');assert.equal(again.options().typeRng,1);assert.equal(again.report().every(s=>s.valid),true);fs.mkdirSync('test-output',{recursive:true});fs.writeFileSync('test-output/validation-export.sav',output);s.undo();s.undo();s.undo();assert.deepEqual(Buffer.from(s.bytes),input);assert.deepEqual(fs.readFileSync(process.env.ER_SAMPLE_FILE),input);});
-module.exports={fixture};
+const { test } = require('node:test'),
+  assert = require('node:assert/strict'),
+  fs = require('node:fs');
+const core = require('../src/core.js'),
+  rng = require('../src/rng.js'),
+  catalog = require('../src/catalog.json');
+const { fixture } = require('./fixture.cjs');
+const party = { kind: 'party', slot: 0 };
+test('modern rotating 20-section save round trips without any changed byte', () => {
+  const input = fixture(),
+    s = new core.Save(input, catalog);
+  assert.deepEqual(s.export(), input);
+  assert.equal(s.trainer().name, 'Tester');
+  assert.equal(s.party()[0].nickname, 'Mewtwo');
+  assert.equal(s.report().length, 20);
+  assert.equal(s.options().abilityRng, 1);
+});
+test('packed moves, nature, held item and shiny fields preserve adjacent bits', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.mon(party);
+  s.editMon(party, { move1: 1003, pp: [16, 24, 24, 32], heldItem: 310, shiny: 2, nature: 13 });
+  const m = s.mon(party);
+  assert.equal(m.move1, 1003);
+  assert.equal(m.heldItem, 310);
+  assert.equal(m.shiny, 2);
+  assert.equal(m.nature, 13);
+  assert.equal(m.experience, before.experience);
+  assert.equal(m.egg, before.egg);
+  assert.equal(m.language, before.language);
+  assert.equal(m.metLevel, before.metLevel);
+  assert.equal(m.abilitySlot, before.abilitySlot);
+  assert.deepEqual(m.evs, before.evs);
+  assert.equal(new core.Save(s.export(), catalog).mon(party).move1, 1003);
+});
+test('level edits update experience, cache and stats; maximum PP is retained', () => {
+  const s = new core.Save(fixture(), catalog);
+  s.editMon(party, { level: 50, nature: 15 });
+  const m = s.mon(party);
+  assert.equal(m.experience, 156250);
+  assert.equal(m.cachedLevel, 50);
+  assert.deepEqual(m.stats, [181, 117, 110, 191, 110, 150]);
+  assert.equal(m.hp, 181);
+  assert.deepEqual(m.pp, [24, 24, 24, 32]);
+});
+test('unchanged form fields preserve partial-level experience and cached stats', () => {
+  const s = new core.Save(fixture(), catalog);
+  const a = s.read(s.address(party), 76),
+    v = new DataView(a.buffer);
+  v.setUint32(8, (10007 << 11) | 85, true);
+  s.write(s.address(party), a);
+  s.rechecksum();
+  const before = s.bytes.slice();
+  s.editMon(party, {
+    nickname: 'Mewtwo',
+    level: 20,
+    species: 150,
+    nature: 15,
+    evs: [0, 0, 0, 0, 0, 0],
+    speedDown: 0,
+  });
+  assert.deepEqual(s.bytes, before);
+  s.editOptions(s.options());
+  assert.deepEqual(s.bytes, before);
+});
+test('cross-section PC records write both sections and retain every unrelated byte', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.bytes.slice(),
+    ref = { kind: 'box', box: 2, slot: 18 },
+    addr = s.address(ref);
+  s.editMon(ref, { pid: 123, nickname: 'Box-Mon', level: 60 });
+  const after = s.export(),
+    allowed = new Set();
+  for (let i = 0; i < 52; i++) allowed.add(s.physical(addr + i));
+  for (const sid of [8, 9]) {
+    const off = s.sections.get(sid).offset;
+    allowed.add(off + 4086);
+    allowed.add(off + 4087);
+  }
+  for (let i = 0; i < after.length; i++)
+    if (after[i] !== before[i]) assert.ok(allowed.has(i), `Unexpected modified byte ${i}`);
+  assert.equal(new core.Save(after, catalog).mon(ref).nickname, 'Box-Mon');
+  assert.equal(
+    s.report().every(s => s.valid),
+    true,
+  );
+  assert.deepEqual(after.subarray(20 * 4096), before.subarray(20 * 4096));
+});
+test('settings preserve reserved bits; undo and redo reproduce byte buffers', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.bytes.slice(),
+    off = s.physical(0xc8a),
+    reserved = s.bytes[off + 1] & 0xfe;
+  s.editOptions({ typeRng: 1, abilityRng: 0, permMega: 0, difficulty: 2 });
+  const after = s.bytes.slice();
+  assert.equal(s.options().typeRng, 1);
+  assert.equal(s.options().abilityRng, 0);
+  assert.equal(s.options().permMega, 0);
+  assert.equal(s.bytes[off + 1] & 0xfe, reserved);
+  s.undo();
+  assert.deepEqual(s.bytes, before);
+  s.redo();
+  assert.deepEqual(s.bytes, after);
+  s.reset();
+  assert.deepEqual(s.bytes, before);
+});
+test('bad checksums, missing sectors, duplicate sections, mixed counters, old sizes fail safely', () => {
+  let b = fixture();
+  b[0] ^= 1;
+  const damaged = new core.Save(b, catalog);
+  assert.equal(damaged.damaged.length, 1);
+  assert.throws(() => damaged.editMon(party, { pid: 10 }), /checksum/);
+  assert.throws(() => damaged.export(), /damaged/);
+  b = fixture();
+  new DataView(b.buffer).setUint32(4088, 0, true);
+  assert.throws(() => new core.Save(b, catalog), /19\/20/);
+  b = fixture();
+  new DataView(b.buffer).setUint16(4096 + 4084, 16, true);
+  assert.throws(() => new core.Save(b, catalog), /Duplicate/);
+  b = fixture();
+  new DataView(b.buffer).setUint32(4092, 5, true);
+  assert.throws(() => new core.Save(b, catalog), /different counters/);
+  assert.throws(() => new core.Save(new Uint8Array(65536), catalog), /128 KB/);
+});
+test('invalid edits roll back atomically and names support game punctuation', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.bytes.slice();
+  assert.throws(() => s.editMon(party, { evs: [252, 252, 252, 0, 0, 0] }), /510/);
+  assert.deepEqual(s.bytes, before);
+  assert.throws(() => s.editMon(party, { nature: 31 }), /nature/);
+  assert.deepEqual(s.bytes, before);
+  assert.throws(() => s.editMon(party, { nickname: '😀' }), /encode/);
+  s.editMon(party, { nickname: 'Test-♀!' });
+  assert.equal(s.mon(party).nickname, 'Test-♀!');
+});
+test('native uint32 LCG matches independent BigInt calculation and inverse', () => {
+  for (let i = 0; i < 10000; i++) {
+    const n = (Math.imul(i, 2654435761) + 0x121ec839) >>> 0;
+    const independent = Number((1103515245n * BigInt(n) + 24691n) & 0xffffffffn);
+    assert.equal(rng.step(n), independent);
+    assert.equal(rng.inverse(rng.step(n)), n);
+  }
+});
+test('fixed sources survive and rejected randomizer outputs reroll', () => {
+  const config = { ...catalog.config, modulus: 1033 };
+  assert.equal(rng.randomize(25, 150, 99, true, config), 25);
+  assert.equal(rng.randomize(72, 2633, 0x121ec839, true, config), 810);
+  assert.equal(rng.randomize(72, 2633, 0x121ec839, false, config), 72);
+  assert.equal(catalog.config.modulus, 1062);
+  assert.equal(catalog.config.banned.length, 38);
+  assert.deepEqual(catalog.species[150].types, [14, 14]);
+});
+test('inverse search returns only forward-verified combinations and respects gender', async () => {
+  const species = catalog.species[359],
+    options = { abilityRng: 1, innateRng: 1, typeRng: 1 },
+    pid = 0x38f74699;
+  const expected = rng.evaluate(species, pid, 0, options, catalog.config);
+  const targets = [expected.ability, null, null, null];
+  const result = await rng.search({
+    species,
+    options,
+    config: catalog.config,
+    targets,
+    lockedSlot: null,
+    keepGender: true,
+    pid,
+    limit: 12,
+  });
+  assert.equal(result.answers.length, 12);
+  for (const answer of result.answers) {
+    assert.equal(
+      rng.evaluate(species, answer.pid, answer.slot, options, catalog.config).ability,
+      targets[0],
+    );
+    assert.equal(rng.gender(species, answer.pid), rng.gender(species, pid));
+    assert.ok(answer.types.every(x => x !== 9 && x < 19));
+  }
+});
+test('search rejects a banned target and unavailable fixed fields without scanning', async () => {
+  const species = catalog.species[150];
+  const result = await rng.search({
+    species,
+    options: { abilityRng: 1, innateRng: 1 },
+    config: catalog.config,
+    targets: [25, null, null, null],
+    lockedSlot: null,
+    pid: 0,
+  });
+  assert.equal(result.answers.length, 0);
+  assert.equal(result.checked, 0);
+});
+if (process.env.ER_SAMPLE_FILE)
+  test('provided real save: edit, export, re-import, undo, and preserve original', () => {
+    const input = fs.readFileSync(process.env.ER_SAMPLE_FILE),
+      s = new core.Save(input, catalog);
+    assert.ok(s.partyCount >= 1 && s.partyCount <= 6);
+    assert.ok(
+      s.mon({ kind: 'box', box: 2, slot: 1 }).species,
+      'This check edits box 3 slot 2, so it needs a Pokémon there.',
+    );
+    assert.deepEqual(Buffer.from(s.export()), input);
+    s.editMon(party, {
+      level: 50,
+      evs: [4, 0, 0, 252, 0, 252],
+      nickname: 'Test-Mewtwo',
+      move1: 1003,
+      pp: [16, 24, 24, 32],
+    });
+    s.editMon({ kind: 'box', box: 2, slot: 1 }, { level: 60, nickname: 'Test-PC' });
+    s.editOptions({ typeRng: 1, permMega: 0, levelCaps: 3 });
+    const output = s.export(),
+      again = new core.Save(output, catalog);
+    assert.equal(again.mon(party).level, 50);
+    assert.equal(again.mon(party).move1, 1003);
+    assert.equal(again.mon({ kind: 'box', box: 2, slot: 1 }).nickname, 'Test-PC');
+    assert.equal(again.options().typeRng, 1);
+    assert.equal(
+      again.report().every(s => s.valid),
+      true,
+    );
+    fs.mkdirSync('test-output', { recursive: true });
+    fs.writeFileSync('test-output/validation-export.sav', output);
+    s.undo();
+    s.undo();
+    s.undo();
+    assert.deepEqual(Buffer.from(s.bytes), input);
+    assert.deepEqual(fs.readFileSync(process.env.ER_SAMPLE_FILE), input);
+  });
+module.exports = { fixture };
