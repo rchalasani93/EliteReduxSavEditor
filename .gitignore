@@ -8,5 +8,4 @@ dist/
 test-output/
 node_modules/
 *.tar.gz
-.openai/local/
 
