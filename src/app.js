@@ -6,7 +6,7 @@
   const typeColors=['#77796a','#ac634c','#7587a9','#986cba','#997759','#968454','#809147','#7968a4','#738997','#757575','#bc6755','#508fae','#629478','#aa934b','#b16990','#60a2b2','#766fa8','#626478','#ad80a0','#947361'];
   const statLabels=['HP','Attack','Defense','Sp. Atk','Sp. Def','Speed'];
   const ballNames=()=>Array.from({length:28},(_,id)=>id===0?'None':catalog.items[id]?.name||`Ball #${id}`);
-  let indexes={};
+  let indexes={},pickerEntries=[];
   function notify(message,error=false){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').className=error?'error':'';$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,error?8500:4000);}
   function guard(){if(dirty){notify('Apply or discard your pending changes before switching views or exporting.',true);return false;}return true;}
   function fail(error){notify(error.message||String(error),true);}
@@ -21,6 +21,10 @@
     for(const kind of ['species','moves','abilities','items']){
       indexes[kind]=new Map();const list=document.createElement('datalist');list.id=`list-${kind}`;
       const entries=Object.values(catalog[kind]).sort((a,b)=>a.name.localeCompare(b.name));
+      if(kind==='abilities'){
+        const banned=new Set(catalog.config.banned);
+        pickerEntries=entries.filter(a=>a.id>0&&a.id<=catalog.config.modulus&&!banned.has(a.id)).map(a=>({id:a.id,search:`${a.name} ${a.desc||''} ${a.id}`.toLocaleLowerCase(),markup:`<button type="button" class="picker-option" data-target-ability="${a.id}"><span><b>${html(a.name)}</b><small>${html(a.desc||'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`}));
+      }
       list.innerHTML=entries.map(e=>{indexes[kind].set(e.name.toLocaleLowerCase(),e.id);indexes[kind].set(display(e).toLocaleLowerCase(),e.id);return `<option value="${html(display(e))}"></option>`;}).join('');document.body.append(list);
     }
   }
@@ -63,25 +67,41 @@
     const variable=!!(kind==='ability'?opts.abilityRng:opts.innateRng)&&!catalog.config.banned.includes(source);
     const dialog=document.createElement('dialog');dialog.id='ability-picker';dialog.setAttribute('aria-labelledby','ability-picker-title');
     dialog.innerHTML=`<div class="dialog-head"><div><h2 id="ability-picker-title">Choose ${kind==='ability'?'an ability':'an innate'}</h2><p>${html(species.name)} · ${kind==='ability'?`Ability ${index+1}`:`Innate ${index+1}`}</p></div><button type="button" class="icon-button" id="close-ability-picker" aria-label="Close ability picker">×</button></div><div class="picker-body">${kind==='ability'?`<h3>AVAILABLE NOW</h3><p class="picker-help">Equip one of this Pokémon’s three current choices.</p><div class="picker-current-grid">${choices.map((id,slot)=>`<button type="button" data-equip-choice="${slot}" ${slot===m.abilitySlot?'disabled':''}><span>Slot ${slot+1}${slot===m.abilitySlot?' · Equipped':''}</span><b>${html(catalog.abilities[id]?.name||id)}</b><small>${html(catalog.abilities[id]?.desc||'')}</small></button>`).join('')}</div>`:''}${variable?`<h3>FIND A NEW COMBINATION</h3><p class="picker-help">Choose an ability to add to your combination search. Find a matching PID to apply it together with your other targets.</p><label class="field"><span>Search abilities</span><input id="ability-picker-filter" type="search" placeholder="Search by name, description, or ID" autocomplete="off"></label><p id="ability-picker-count" class="field-help" aria-live="polite"></p><div id="ability-picker-options" aria-label="Searchable abilities"></div>`:`<p class="notice">${catalog.config.banned.includes(source)?'This slot is excluded from ability randomization.':`The ${kind==='ability'?'ability':'innate'} randomizer is off in this save.`} ${kind==='ability'?'You can equip any of the current choices above.':'This innate stays fixed.'}</p>`}</div>`;
-    document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});$('close-ability-picker').onclick=()=>dialog.close();
+    let drawFrame;
+    document.body.append(dialog);dialog.addEventListener('close',()=>{cancelAnimationFrame(drawFrame);dialog.remove();},{once:true});$('close-ability-picker').onclick=()=>dialog.close();
     dialog.querySelectorAll('[data-equip-choice]').forEach(button=>button.onclick=()=>{
       const slot=+button.dataset.equipChoice;dialog.close();
       apply(()=>save.editMon(ref,{abilitySlot:slot},`Equip ability ${slot+1} on ${m.nickname}`),'Equipped ability updated. Your search fields are preserved.');
     });
     if(variable){
-      const available=Object.values(catalog.abilities).filter(a=>a.id>0&&a.id<=catalog.config.modulus&&!catalog.config.banned.includes(a.id)).sort((a,b)=>a.name.localeCompare(b.name));
+      const filter=dialog.querySelector('#ability-picker-filter'),list=dialog.querySelector('#ability-picker-options'),count=dialog.querySelector('#ability-picker-count');
+      const more=document.createElement('button');more.type='button';more.id='ability-picker-more';more.className='picker-more';more.textContent='Show more abilities';more.hidden=true;list.after(more);
+      let matches=[],shown=0;
+      const append=()=>{
+        if(!dialog.open)return;
+        const next=matches.slice(shown,shown+40);shown+=next.length;
+        list.insertAdjacentHTML('beforeend',next.map(a=>a.markup).join(''));
+        count.textContent=shown<matches.length?`Showing ${shown} of ${matches.length.toLocaleString()} abilities · Search covers the full list`:`${matches.length.toLocaleString()} searchable ${matches.length===1?'ability':'abilities'}`;
+        more.hidden=shown>=matches.length;
+      };
       const draw=()=>{
-        const query=$('ability-picker-filter').value.trim().toLocaleLowerCase(),matches=available.filter(a=>`${a.name} ${a.desc||''} ${a.id}`.toLocaleLowerCase().includes(query));
-        $('ability-picker-count').textContent=`${matches.length.toLocaleString()} searchable ${matches.length===1?'ability':'abilities'}`;
-        $('ability-picker-options').innerHTML=matches.length?matches.map(a=>`<button type="button" class="picker-option" data-target-ability="${a.id}"><span><b>${html(a.name)}</b><small>${html(a.desc||'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`).join(''):'<p class="picker-help">No abilities match your search.</p>';
-        $('ability-picker-options').querySelectorAll('[data-target-ability]').forEach(button=>button.onclick=()=>{
+        if(!dialog.open)return;
+        const query=filter.value.trim().toLocaleLowerCase();matches=query?pickerEntries.filter(a=>a.search.includes(query)):pickerEntries;shown=0;
+        list.replaceChildren();list.scrollTop=0;append();
+        if(!matches.length)list.innerHTML='<p class="picker-help">No abilities match your search.</p>';
+      };
+      list.onclick=e=>{
+        const button=e.target.closest('[data-target-ability]');if(button){
           const ability=catalog.abilities[+button.dataset.targetAbility],draft=searchDraft(),preferred=kind==='ability'?0:index+1;
           const empty=draft.targets.findIndex(target=>!target.trim()),field=draft.matchMode==='any'&&draft.targets[preferred].trim()&&empty>=0?empty:preferred;
           draft.targets[field]=display(ability);dialog.close();resetSearch();tab='randomizer';render();
           $('target-'+field).focus();$('search-button').scrollIntoView({block:'center'});notify(`${ability.name} selected. Find combinations to apply it.`);
-        });
+        }
       };
-      $('ability-picker-filter').oninput=draw;draw();
+      filter.oninput=()=>{cancelAnimationFrame(drawFrame);drawFrame=requestAnimationFrame(draw);};
+      list.onscroll=()=>{if(shown<matches.length&&list.scrollHeight-list.scrollTop-list.clientHeight<100)append();};more.onclick=append;
+      // Let the modal open before creating its first small batch of options.
+      drawFrame=requestAnimationFrame(draw);
     }
     dialog.showModal();if(variable)$('ability-picker-filter').focus();
   }

@@ -14,6 +14,8 @@ Pokémon details, Ability lab, PID/form previews, and search results show all th
 
 The **↻** controls open a searchable ability picker. Current ability choices can be equipped directly. Picking a new randomized ability adds a search target; a verified PID result is still required to apply it. In any-order mode an empty target field is used before replacing an existing entry. Fixed or excluded slots explain why new randomized choices are unavailable.
 
+The picker opens with 40 options, caches its sorted ability data, and loads more as you scroll or click **Show more abilities**. Search always covers the entire ability catalog, including options that have not been displayed yet.
+
 Click anywhere on a search-result row, or focus it and press Enter/Space, to apply that PID. The applied row is marked, earlier results and continuation remain available, and the exact search text and options are preserved. Search drafts are kept separately for each Pokémon during the session.
 
 Pokémon artwork is bundled for all 1,922 catalog species, including forms, in the roster and details header. It works offline and does not send save information to an image host. Artwork comes from the [ER Nextdex sprite collection](https://github.com/ForwardFeed/ER-nextdex/tree/0a254c8edca412eec353f71597e70a2b47262128/static/sprites). Run `node scripts/icons.cjs` to regenerate the bundled image catalog from that pinned source.
@@ -50,10 +52,10 @@ Binary and browser verification can establish export integrity; in-emulator veri
 
 ## GitHub Pages
 
-The included `.github/workflows/pages.yml` runs the tests, builds the editor, and deploys only `dist/`. Pushes to `main` or `master` trigger it; it can also be started manually from the repository's Actions tab. The workflow uses GitHub's built-in token and needs no additional secrets or dependency installation.
+The included `.github/workflows/pages.yml` runs the tests and builds the editor for pushes and pull requests targeting `main` or `develop`, and for merge queue checks. It can also be started manually from the repository's Actions tab. Successful pushes and manual runs on `main` deploy only `dist/`; `develop`, pull requests, and other branches only validate the build. The workflow uses GitHub's built-in token and needs no additional secrets or dependency installation. This is the sole Pages deployment workflow; the repository does not use Jekyll.
 
 1. Create a GitHub repository, for example `elite-redux-save-editor`. Use a public repository for GitHub Pages on GitHub Free.
-2. Commit and push this project, including `.github/workflows/pages.yml`, to `main` or `master`.
+2. Keep the workflows on both `main` and `develop`. Push to `develop` to validate changes, then merge into `main` to publish.
 3. In the repository, open **Settings → Pages → Build and deployment**, and set **Source** to **GitHub Actions**.
 4. Open **Actions → Deploy editor to GitHub Pages**. If the first run started before Pages was enabled, rerun it or use **Run workflow**.
 5. After the deployment succeeds, open the URL shown in **Settings → Pages**, normally `https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`.
@@ -61,3 +63,7 @@ The included `.github/workflows/pages.yml` runs the tests, builds the editor, an
 The editor embeds its assets, so it works under the repository URL without a custom base path. Leave `dist/` and `Redux Save Studio.html` out of Git; the workflow generates them.
 
 GitHub's [publishing-source instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) and [custom-workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) describe this deployment method.
+
+Dependabot checks GitHub Actions and npm dependencies independently on `main` and `develop`. Keep `.github/dependabot.yml` on the default branch (`main`): GitHub reads that copy even for updates targeting `develop`. Dependabot security updates target the default branch; the `develop` entries provide scheduled version updates. See GitHub's [Dependabot configuration reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#target-branch).
+
+Repository settings complete the workflow protection: keep Pages set to **GitHub Actions**, restrict the `github-pages` environment's deployment branches to `main`, and use a branch ruleset covering both `main` and `develop` to require the `build`, `Analyze (actions)`, and `Analyze (javascript-typescript)` checks before merging. Keep CodeQL in **Advanced** setup for the committed workflow; disable Default setup if it was previously enabled. Keep private vulnerability reporting enabled so the reporting link in [SECURITY.md](SECURITY.md) remains available. These settings are managed in GitHub and are not applied by committing workflow files. See GitHub's [environment protection guide](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [ruleset guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository).
