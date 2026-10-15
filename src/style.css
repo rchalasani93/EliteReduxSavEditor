@@ -89,3 +89,6 @@ fieldset.plain{border:0;padding:0;margin:0;min-width:0}
 .bag-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:#101822;font-size:12px;cursor:pointer;min-width:0}.bag-item span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bag-item small{color:var(--muted);font-size:10px}.bag-item.changed{border-color:var(--accent)}
 @media (max-width:760px){.box-name-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bag-tools{grid-template-columns:1fr}.field-grid.two-up{grid-template-columns:1fr}.mon-actions button{flex:1 1 45%}}
 @media (max-width:760px),(any-pointer:coarse){.set-text{font-size:16px}}
+.box-name-cell{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--line);border-radius:7px;background:#101822}
+.dex-grid{grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}.dex-item select{width:auto;flex:0 0 auto;padding:5px 6px;font-size:11px}
+@media (max-width:760px),(any-pointer:coarse){.dex-item select{font-size:16px}}

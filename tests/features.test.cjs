@@ -42,6 +42,34 @@ test('money and coins are stored as plain values and bag flags flip single bits'
   s.editItems({1:false});assert.deepEqual(s.ownedItems(),[644]);
   s.editBoxNames(['Team','',undefined]);assert.equal(s.boxName(0),'Team');assert.throws(()=>s.editBoxName(1,'NineChars'),/8 characters/);
 });
+test('Battle Points edit only their own two bytes and respect the 9,999 cap',()=>{
+  const s=new core.Save(fixture(),catalog),before=s.bytes.slice();assert.deepEqual(s.battlePoints(),{battlePoints:0,cardBattlePoints:0,supported:true});
+  s.editBattlePoints(1234);assert.equal(s.battlePoints().battlePoints,1234);assert.equal(s.battlePoints().cardBattlePoints,0);
+  changedOnly(before,s.bytes,i=>i===s.physical(0xc14)||i===s.physical(0xc15)||i%4096>=4084);
+  assert.equal(s.options().textSpeed,new core.Save(fixture(),catalog).options().textSpeed);
+  assert.throws(()=>s.editBattlePoints(10000),/Battle Points/);
+});
+test('Pokédex, speed vars, stats, card BP, PC and nuzlocke edits touch only their own bytes',()=>{
+  const s=new core.Save(fixture(),catalog),before=s.bytes.slice(),SB1=2*core.DATA;
+  s.editPokedex({150:'caught',25:'seen'});const d=s.pokedex();assert.equal(d.caught(150),1);assert.equal(d.seen(150),1);assert.equal(d.seen(25),1);assert.equal(d.caught(25),0);
+  s.editPokedex({150:'seen'});assert.equal(s.pokedex().caught(150),0);assert.equal(s.pokedex().seen(150),1);
+  assert.throws(()=>s.editPokedex({0:'seen'}),/Pokédex/);assert.throws(()=>s.editPokedex({1:'owned'}),/state/);
+  s.editOptions({battleSpeed:3,overworldSpeed:2});assert.equal(s.options().battleSpeed,3);assert.equal(s.options().overworldSpeed,2);assert.equal(s.getVar(0xe1),3);
+  s.editGameStats({5:123456});assert.equal(s.gameStats()[5],123456);assert.throws(()=>s.editGameStats({10:1}),/cannot/);
+  s.editCardBattlePoints(77);assert.equal(s.battlePoints().cardBattlePoints,77);
+  s.editStorage({currentBox:4,wallpapers:Array.from({length:26},(_,i)=>i%16)});assert.equal(s.storage().currentBox,4);assert.equal(s.storage().wallpapers[15],15);
+  assert.throws(()=>s.editStorage({wallpapers:Array(26).fill(16)}),/wallpaper/);
+  s.editNuzlocke({captureRule:1});assert.equal(s.nuzlocke().captureRule,1);
+  const allowed=new Set();const add=(o,n)=>{for(let i=0;i<n;i++)allowed.add(s.physical(o+i));};
+  add(SB1+0x2e54,188);add(SB1+0x2f10,188);add(SB1+0x1c78+0xe1*2,2);add(SB1+0x1c78+0xe3*2,2);add(SB1+0x1e78+5*4,4);add(0xc16,2);add(core.PC_START-4,1);add(core.PC_START-4+0x9f5e,26);add(0xc9c,1);
+  changedOnly(before,s.bytes,i=>allowed.has(i)||i%4096>=4084);
+});
+test('clock shifts move the stored offset the opposite way and stay normalised',()=>{
+  const s=new core.Save(fixture(),catalog);s.write(0x24,[0x10,0,5,30,0,0]);s.rechecksum();
+  s.shiftClock(90);assert.deepEqual(s.clockOffset(),{days:16,hours:4,minutes:0,seconds:0});
+  s.shiftClock(-24*60*2);assert.deepEqual(s.clockOffset(),{days:18,hours:4,minutes:0,seconds:0});
+  s.shiftClock(5*60);assert.deepEqual(s.clockOffset(),{days:17,hours:23,minutes:0,seconds:0});
+});
 test('create, duplicate, move, swap and release Pokémon keep the save valid',()=>{
   const s=new core.Save(fixture(),catalog);
   const a=s.createMon({kind:'party'},{species:359,level:30,moves:[400],nature:3,pid:0x1234});
@@ -78,7 +106,7 @@ test('an unrecognised party Pokémon no longer blocks opening the save',()=>{
 });
 if(process.env.ER_SAMPLE_FILE)test('provided real save: new features export cleanly and match stored stats',()=>{
   const input=fs.readFileSync(process.env.ER_SAMPLE_FILE),s=new core.Save(input,catalog);
-  assert.equal(s.invalidSlots().length,0);assert.ok(s.ownedItems().includes(1),'Master Ball flag expected');
+  assert.equal(s.invalidSlots().length,0);assert.ok(s.ownedItems().includes(1),'Master Ball flag expected');assert.ok(s.battlePoints().supported);const dex=s.pokedex();for(let n=1;n<=dex.max;n++)if(dex.caught(n))assert.equal(dex.seen(n),1,`caught #${n} must be seen`);assert.ok(dex.counts().caught>0);assert.equal(s.gameStats()[0],s.counter,'times-saved stat matches the save counter');assert.ok(s.options().battleSpeed<=3&&s.options().overworldSpeed<=3);assert.ok(s.storage().wallpapers.every(w=>w<17));
   for(const m of s.party()){const f=s.partyForm(s.rawRecord(m.ref).slice(0,52)),v=new DataView(f.buffer);assert.deepEqual([64,66,68,72,74,70].map(o=>v.getUint16(o,true)),m.stats);}
   const placed=s.createMon({kind:'box'},{species:445,level:50,moves:[89]});s.moveMon(placed,{kind:'party',slot:0});s.editItems({1:false});s.editTrainer({name:'Test'});s.editBoxNames(['Alpha']);
   const out=new core.Save(s.export(),catalog);assert.equal(out.report().every(r=>r.valid),true);assert.equal(out.mon(party(0)).species,445);assert.equal(out.trainerCard().name,'Test');
