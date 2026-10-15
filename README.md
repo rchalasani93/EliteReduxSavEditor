@@ -1,2 +1,65 @@
-# EliteReduxSavEditor
-Save editor for Elite Redux 2.6.4
+# Redux Save Studio
+
+Build the editor with `npm run build`, then open the generated **Redux Save Studio.html** in a modern browser. The generated editor is a standalone offline application: no install, server, account, or internet connection is needed to use it. Your save is read and edited only in browser memory.
+
+The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` / `.srm` battery saves. It reads party Pokémon, all 26 PC boxes, and game settings. It edits existing Pokémon; it does not create/delete Pokémon, modify inventory, or convert older save formats.
+
+Features include species, nickname, experience-backed level, nature, EVs, held items, moves (including IDs over 999), current party PP, shiny palette, Poké Ball, friendship, Hidden Power type, egg state, ability slot, and zero Speed IV. Redux's other IVs are fixed at 31, with the game's Hell-mode exception. Party stats are refreshed when relevant fields change. Box Pokémon derive stats on withdrawal.
+
+Ability lab previews and searches abilities and innates derived from PID. It uses native 32-bit arithmetic and inverse LCG enumeration in a cancellable Web Worker. Every displayed result is checked with the forward randomizer. Keep-gender and ability-slot constraints are available. Ability and innate randomizers must be enabled to change their derived results. Mega/form preview does not modify the saved species.
+
+Search matches requested abilities **in any order by default**: each may appear in the active ability or any of the three innate slots. Every entered ability must be present; repeating one requires distinct slots containing that ability. Blank inputs accept any remaining abilities. Uncheck **Match abilities in any order** to require the exact active/innate positions. Fixed abilities, randomizer exclusions, ability-slot selection, and gender constraints remain respected. Results label the active ability and innate order they will actually use.
+
+Pokémon details, Ability lab, PID/form previews, and search results show all three switchable ability choices. The equipped choice is marked separately from the three innates. Change **Equipped ability** in the Pokémon form and apply the changes to select a different choice. Search results mark which choice will be equipped when applied.
+
+The **↻** controls open a searchable ability picker. Current ability choices can be equipped directly. Picking a new randomized ability adds a search target; a verified PID result is still required to apply it. In any-order mode an empty target field is used before replacing an existing entry. Fixed or excluded slots explain why new randomized choices are unavailable.
+
+Click anywhere on a search-result row, or focus it and press Enter/Space, to apply that PID. The applied row is marked, earlier results and continuation remain available, and the exact search text and options are preserved. Search drafts are kept separately for each Pokémon during the session.
+
+Pokémon artwork is bundled for all 1,922 catalog species, including forms, in the roster and details header. It works offline and does not send save information to an image host. Artwork comes from the [ER Nextdex sprite collection](https://github.com/ForwardFeed/ER-nextdex/tree/0a254c8edca412eec353f71597e70a2b47262128/static/sprites). Run `node scripts/icons.cjs` to regenerate the bundled image catalog from that pinned source.
+
+Search loads results in batches of 12. Click **Load more matches** below the results to continue from the saved search position, without rescanning earlier candidates or repeating results. Earlier matches remain available, and **Search complete** appears only when the candidate scan finishes. Changing targets or constraints starts a fresh search. Stop search keeps already loaded matches; starting another search replaces them.
+
+The published **2.65.4 Nextdex snapshot**, created October 7, 2026 UTC, supplies 1,922 species, 1,032 moves, and 1,063 ability entries (IDs 0–1062). The source's 38 excluded abilities are included. Saves do not contain the exact ROM build version, so matching catalog/ROM data is required for reliable ability previews and searches. Newer/custom ROMs can import a generated catalog with explicit randomizer configuration. Nextdex gameData JSON imports retain this build's exclusions; use them only when that rule matches the ROM.
+
+The editor checks the save signature, all section IDs, consistent save counters, Pokémon layout and checksums. Damaged/incomplete saves cannot be edited or exported. Exports recalculate checksums, reopen the bytes with the parser, preserve file size and unrelated data, and download a new file. The original is never overwritten. Undo/redo and an original-backup download are available.
+
+1. Save through the **in-game** menu, then fully close the emulator.
+2. Open its battery `.sav` / `.srm` here and download an original backup.
+3. Edit and click **Apply**; review the changes and export.
+4. Place the exported file in the emulator's battery-save folder and rename it to match the ROM. Use the extension expected by your emulator.
+5. Boot normally and choose **Continue**. Loading an old savestate can restore old save data.
+
+## Development
+
+No third-party runtime dependencies.
+
+```text
+npm run build
+npm test
+npm start
+```
+
+The dev server listens on `http://127.0.0.1:4173`. Run the build before starting it. Build produces `dist/index.html` and the standalone editor; both are generated files and are excluded from Git. No dependency installation or network connection is required to build from the included source and data. To run additional integration checks on a real save, set `ER_SAMPLE_FILE` to its absolute path before running tests. Real save files, ROMs, research downloads, and test exports are excluded from Git and deployment.
+
+The repository keeps the application in `src/`, build and maintenance scripts in `scripts/`, and checks in `tests/`. The bundled `src/catalog.json` and `src/icons.json` are required application data. Temporary research files, screenshots, reference-page copies, and deployment archives are not needed to build or run the editor.
+
+`.openai/hosting.json` connects this checkout to its existing ChatGPT Site and declares `dist/` as the hosting directory. It contains the Site project ID and hosting settings, not API keys. GitHub and the offline editor do not require it; it is retained for continued ChatGPT Sites deployments. Removing it does not shut down an already deployed site, but removes this checkout's link to that deployment.
+
+The source parser and writer are independently implemented. Public game data and format definitions come from [Elite Redux source](https://github.com/Elite-Redux/eliteredux-source), its [configuration](https://github.com/Elite-Redux/er-config), and [ER Nextdex](https://github.com/ForwardFeed/ER-nextdex). The [reference editor](https://pokemon-elite-redux--srm-editor.pages.dev/) informed the feature scope.
+
+Binary and browser verification can establish export integrity; in-emulator verification requires the matching ROM and emulator. No matching ROM is included with this project.
+
+## GitHub Pages
+
+The included `.github/workflows/pages.yml` runs the tests, builds the editor, and deploys only `dist/`. Pushes to `main` or `master` trigger it; it can also be started manually from the repository's Actions tab. The workflow uses GitHub's built-in token and needs no additional secrets or dependency installation.
+
+1. Create a GitHub repository, for example `elite-redux-save-editor`. Use a public repository for GitHub Pages on GitHub Free.
+2. Commit and push this project, including `.github/workflows/pages.yml`, to `main` or `master`.
+3. In the repository, open **Settings → Pages → Build and deployment**, and set **Source** to **GitHub Actions**.
+4. Open **Actions → Deploy editor to GitHub Pages**. If the first run started before Pages was enabled, rerun it or use **Run workflow**.
+5. After the deployment succeeds, open the URL shown in **Settings → Pages**, normally `https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`.
+
+The editor embeds its assets, so it works under the repository URL without a custom base path. Leave `dist/` and `Redux Save Studio.html` out of Git; the workflow generates them. The `.openai/` configuration is not used by this workflow and is not included in the published website.
+
+GitHub's [publishing-source instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) and [custom-workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) describe this deployment method.
