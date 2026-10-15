@@ -73,3 +73,19 @@ body.dialog-open>header,body.dialog-open>main{pointer-events:none}
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
+.mon-actions{display:flex;flex-wrap:wrap;gap:8px;margin:-6px 0 18px}.mon-actions button{font-size:11px;padding:7px 11px}
+.danger{color:var(--red)}.danger-fill{background:#5a2328!important;border-color:#8a3a40!important;color:#ffd9d9!important}
+.roster-actions{display:flex;flex-wrap:wrap;gap:6px;margin:0 14px 12px}.roster-actions button{flex:1 1 auto;font-size:11px;padding:7px 8px}
+.tool-dialog{width:min(620px,calc(100vw - 32px));max-width:620px}.dialog-sub{margin:6px 0 0}.dialog-body{margin-top:18px}
+.field-grid.two-up{grid-template-columns:repeat(2,minmax(0,1fr))}
+.section-label{font-size:10px;letter-spacing:1.4px;color:var(--accent);margin:20px 0 10px;text-transform:uppercase}
+.tab-switch{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-bottom:16px}.tab-switch button{border:0;border-radius:0;background:transparent;padding:8px 14px;font-size:12px}.tab-switch button.active{background:var(--panel2);color:var(--accent)}
+.set-text{width:100%;min-height:180px;resize:vertical;color:var(--ink);background:#0f1620;border:1px solid var(--line);border-radius:6px;padding:12px;font:12px/1.6 ui-monospace,Consolas,monospace}
+.check-label{font-size:11px;color:var(--muted);align-self:center}
+fieldset.plain{border:0;padding:0;margin:0;min-width:0}
+.box-name-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.bag-tools{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}.bag-bulk{margin:14px 0}
+.bag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px;max-height:440px;overflow:auto;padding:2px;border-top:1px solid var(--line);padding-top:12px}
+.bag-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:#101822;font-size:12px;cursor:pointer;min-width:0}.bag-item span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bag-item small{color:var(--muted);font-size:10px}.bag-item.changed{border-color:var(--accent)}
+@media (max-width:760px){.box-name-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bag-tools{grid-template-columns:1fr}.field-grid.two-up{grid-template-columns:1fr}.mon-actions button{flex:1 1 45%}}
+@media (max-width:760px),(any-pointer:coarse){.set-text{font-size:16px}}
