@@ -87,6 +87,8 @@
     });
   }
   function randomU32() {const c=globalThis.crypto;if(c?.getRandomValues)return c.getRandomValues(new Uint32Array(1))[0];return Math.floor(Math.random()*2**32)>>>0;}
+  // Unbiased integer in [0, n) by rejection sampling on the smallest covering bit mask (no modulo bias).
+  function randomInt(n) {if(!Number.isInteger(n)||n<1||n>2**31)throw new Error('Invalid random range.');let mask=1;while(mask<n)mask*=2;mask-=1;let x;do{x=randomU32()&mask;}while(x>=n);return x;}
   function sanitizeName(text,length) {let out='';for(const ch of text){if(!encodeMap.has(ch))continue;if([...out].length>=length)break;out+=ch;}return out;}
   // In-game nicknames use the base species name (Absol, not "Absol Mega"); find it via the species key prefix.
   const keyIndexes=new WeakMap();
@@ -242,12 +244,12 @@
       a.set(encode(o.otName??t.name,7),31);
       let nick=o.nickname;if(nick===undefined)nick=sanitizeName(baseSpeciesName(this.catalog,species),12);a.set(encode(nick,12),38);
       a[50]=4|((o.speedDown?1:0)<<5)|((o.otGender??t.gender)<<6);a[30]=o.metLocation??0xff;
-      const hpType=o.hpType??[0,1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18][randomU32()%18];
+      const hpType=o.hpType??[0,1,2,3,4,5,6,7,8,10,11,12,13,14,15,16,17,18][randomInt(18)];
       const f=(key,val)=>maskBits(v,...FIELDS[key],val);
       f('move1',moves[0]);f('experience',expForLevel(level));f('move2',moves[1]);f('move3',moves[2]);f('friendship',integer(o.friendship??70,0,255,'Friendship'));
       f('species',o.species);f('move4',moves[3]);f('hpType',hpType);
       f('heldItem',o.heldItem??0);if(o.heldItem&&!this.catalog.items[o.heldItem])throw new Error('Unknown item ID.');
-      f('nature',integer(o.nature??randomU32()%25,0,24,'Nature'));f('language',2);f('metLevel',level);
+      f('nature',integer(o.nature??randomInt(25),0,24,'Nature'));f('language',2);f('metLevel',level);
       f('shiny',integer(o.shiny??0,0,3,'Shininess'));f('maxShiny',o.shiny??0);f('abilitySlot',integer(o.abilitySlot??0,0,2,'Ability slot'));
       const evs=o.evs||[0,0,0,0,0,0];if(evs.length!==6||evs.reduce((s,n)=>s+n,0)>510)throw new Error('EVs must have six values totalling no more than 510.');evs.forEach((n,i)=>a[24+DISPLAY_TO_STORE[i]]=integer(n,0,252,'EV'));
       return a;
@@ -385,5 +387,5 @@
     for(let box=0;box<26;box++)put(PC_START+780*52+box*9,encode('Box '+(box+1),9));
     for(const off of locations.values())v.setUint16(off+DATA+2,checksum(bytes.subarray(off,off+DATA)),true);return bytes;
   }
-  return {Save,demo,toShowdown,parseShowdown,baseSpeciesName,sanitizeName,STATUS,LANGUAGES,readMon,checksum,decode,encode,calcStats,expForLevel,levelForExp,maxPP,NATURES,SECTION,DATA,SIGNATURE,PARTY_START,PC_START,OPTIONS};
+  return {Save,demo,randomInt,toShowdown,parseShowdown,baseSpeciesName,sanitizeName,STATUS,LANGUAGES,readMon,checksum,decode,encode,calcStats,expForLevel,levelForExp,maxPP,NATURES,SECTION,DATA,SIGNATURE,PARTY_START,PC_START,OPTIONS};
 });

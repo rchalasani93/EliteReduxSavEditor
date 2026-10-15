@@ -84,3 +84,7 @@ if(process.env.ER_SAMPLE_FILE)test('provided real save: new features export clea
   const out=new core.Save(s.export(),catalog);assert.equal(out.report().every(r=>r.valid),true);assert.equal(out.mon(party(0)).species,445);assert.equal(out.trainerCard().name,'Test');
   while(s.undoStack.length)s.undo();assert.deepEqual(Buffer.from(s.bytes),input);
 });
+test('random natures and Hidden Power types stay in range and cover every value',()=>{
+  const seen=new Set();for(let i=0;i<5000;i++){const n=core.randomInt(25);assert.ok(Number.isInteger(n)&&n>=0&&n<25);seen.add(n);}assert.equal(seen.size,25);
+  const s=new core.Save(fixture(),catalog);for(let i=0;i<50;i++){const r=core.readMon(s.newRecord({species:150,moves:[1]}),{kind:'box'});assert.ok(r.nature<25);assert.ok(r.hpType<19&&r.hpType!==9);}
+});
