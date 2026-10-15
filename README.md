@@ -10,7 +10,7 @@ The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` /
 
 **More Pokémon fields.** Original trainer name, trainer/secret ID and gender, met location, language, markings, the Alpha and fateful-encounter flags, and, for party Pokémon, current HP and status condition (sleep, poison, toxic, burn, freeze, paralysis, frostbite, bleed).
 
-**Trainer & bag tab.** Edit your trainer name, gender, Trainer/Secret ID and play time; by default, Pokémon you caught are updated to the new OT so they keep obeying. Edit money (up to ¥999,999) and Game Corner coins, rename all 26 PC boxes, and choose which items you own. Elite Redux stores the bag as one "owned" flag per item with unlimited uses, so items are toggled rather than counted; search, category and owned/missing filters plus bulk add/remove are available.
+**Trainer & bag tab.** Edit your trainer name, gender, Trainer/Secret ID and play time; by default, Pokémon you caught are updated to the new OT so they keep obeying. Edit money (up to ¥999,999), Game Corner coins and Battle Points (up to 9,999), rename all 26 PC boxes, and choose which items you own. Elite Redux stores the bag as one "owned" flag per item with unlimited uses, so items are toggled rather than counted; search, category and owned/missing filters plus bulk add/remove are available.
 
 **All option-menu settings.** Besides difficulty, level caps, randomizers and the other run rules, Game settings covers text speed, HP bar speed, battle animations, battle style, sound, button mode, window frame, battle UI skin, damage numbers, nickname prompts, player AI, individual colours and double battles.
 

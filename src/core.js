@@ -26,6 +26,8 @@
   };
   // SaveBlock1 starts at logical offset 2*DATA. Elite Redux keeps the bag as one "owned" bit per item ID.
   const SB1 = 2 * DATA, PARTY_COUNT = SB1 + 0x234, MONEY = SB1 + 0x400, COINS = SB1 + 0x404, ITEM_FLAGS = SB1 + 0x40a, ITEM_SLOTS = 2048;
+  // SaveBlock2.frontier.battlePoints: the Battle Frontier block ends right where the option bits at 0xC88 begin.
+  const BATTLE_POINTS = 0xc14, MAX_BATTLE_POINTS = 9999;
   const BOX_NAMES = PC_START + 780 * 52, MAX_MONEY = 999999, MAX_COINS = 9999;
   const STATUS = {none: 0, sleep: 0x7, poison: 1 << 3, burn: 1 << 4, freeze: 1 << 5, paralysis: 1 << 6, toxic: 1 << 7, frostbite: 1 << 12, bleed: 1 << 13};
   const LANGUAGES = {1: 'Japanese', 2: 'English', 3: 'French', 4: 'Italian', 5: 'German', 7: 'Spanish'};
@@ -212,6 +214,11 @@
         if(updateOwned&&(after.id!==before.id||after.name!==before.name||after.gender!==before.gender))
           for(const m of this.allMons())if(m.otid===before.id&&m.otName===before.name){const addr=this.address(m.ref),r=this.read(addr,52),rv=new DataView(r.buffer);rv.setUint32(4,after.id,true);r.set(encode(after.name,7),31);r[50]=(r[50]&~0x40)|(after.gender<<6);this.write(addr,r);}
       });
+    }
+    battlePoints() {const v=new DataView(this.read(BATTLE_POINTS,4).buffer),bp=v.getUint16(0,true),card=v.getUint16(2,true);return {battlePoints:bp,cardBattlePoints:card,supported:bp<=MAX_BATTLE_POINTS&&card<=MAX_BATTLE_POINTS};}
+    editBattlePoints(value) {
+      if(!this.battlePoints().supported)throw new Error('Battle Points could not be read safely from this save.');
+      this.transact('Edit Battle Points',()=>{const a=new Uint8Array(2);new DataView(a.buffer).setUint16(0,integer(value,0,MAX_BATTLE_POINTS,'Battle Points'),true);this.write(BATTLE_POINTS,a);});
     }
     editMoney(patch) {
       const cur=this.money();if(!cur.supported)throw new Error('Money could not be read safely from this save.');

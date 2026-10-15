@@ -42,6 +42,13 @@ test('money and coins are stored as plain values and bag flags flip single bits'
   s.editItems({1:false});assert.deepEqual(s.ownedItems(),[644]);
   s.editBoxNames(['Team','',undefined]);assert.equal(s.boxName(0),'Team');assert.throws(()=>s.editBoxName(1,'NineChars'),/8 characters/);
 });
+test('Battle Points edit only their own two bytes and respect the 9,999 cap',()=>{
+  const s=new core.Save(fixture(),catalog),before=s.bytes.slice();assert.deepEqual(s.battlePoints(),{battlePoints:0,cardBattlePoints:0,supported:true});
+  s.editBattlePoints(1234);assert.equal(s.battlePoints().battlePoints,1234);assert.equal(s.battlePoints().cardBattlePoints,0);
+  changedOnly(before,s.bytes,i=>i===s.physical(0xc14)||i===s.physical(0xc15)||i%4096>=4084);
+  assert.equal(s.options().textSpeed,new core.Save(fixture(),catalog).options().textSpeed);
+  assert.throws(()=>s.editBattlePoints(10000),/Battle Points/);
+});
 test('create, duplicate, move, swap and release Pokémon keep the save valid',()=>{
   const s=new core.Save(fixture(),catalog);
   const a=s.createMon({kind:'party'},{species:359,level:30,moves:[400],nature:3,pid:0x1234});
@@ -78,7 +85,7 @@ test('an unrecognised party Pokémon no longer blocks opening the save',()=>{
 });
 if(process.env.ER_SAMPLE_FILE)test('provided real save: new features export cleanly and match stored stats',()=>{
   const input=fs.readFileSync(process.env.ER_SAMPLE_FILE),s=new core.Save(input,catalog);
-  assert.equal(s.invalidSlots().length,0);assert.ok(s.ownedItems().includes(1),'Master Ball flag expected');
+  assert.equal(s.invalidSlots().length,0);assert.ok(s.ownedItems().includes(1),'Master Ball flag expected');assert.ok(s.battlePoints().supported);
   for(const m of s.party()){const f=s.partyForm(s.rawRecord(m.ref).slice(0,52)),v=new DataView(f.buffer);assert.deepEqual([64,66,68,72,74,70].map(o=>v.getUint16(o,true)),m.stats);}
   const placed=s.createMon({kind:'box'},{species:445,level:50,moves:[89]});s.moveMon(placed,{kind:'party',slot:0});s.editItems({1:false});s.editTrainer({name:'Test'});s.editBoxNames(['Alpha']);
   const out=new core.Save(s.export(),catalog);assert.equal(out.report().every(r=>r.valid),true);assert.equal(out.mon(party(0)).species,445);assert.equal(out.trainerCard().name,'Test');
