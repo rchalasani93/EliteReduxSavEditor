@@ -1,12 +1,103 @@
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id),html=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const builtin=JSON.parse($('catalog').textContent);let catalog=builtin,save=null,filename='save.sav',roster='party',box=0,ref=null,tab='pokemon',dirty=false,worker=null,searchResults=[],searchSession=null,matchMode='any',toastTimer;
+  const $=id=>document.getElementById(id),html=ERHtml.escape;
+  const builtin=JSON.parse($('catalog').textContent);let catalog=builtin,save=null,filename='save.sav',roster='party',box=0,ref=null,tab='pokemon',dirty=false,worker=null,workerUrl=null,searchResults=[],searchSession=null,matchMode='any',toastTimer;
   const pokemonIcons=JSON.parse($('pokemon-icons').textContent).images,searchDrafts=new Map();
   const typeColors=['#77796a','#ac634c','#7587a9','#986cba','#997759','#968454','#809147','#7968a4','#738997','#757575','#bc6755','#508fae','#629478','#aa934b','#b16990','#60a2b2','#766fa8','#626478','#ad80a0','#947361'];
   const statLabels=['HP','Attack','Defense','Sp. Atk','Sp. Def','Speed'];
   const ballNames=()=>Array.from({length:28},(_,id)=>id===0?'None':catalog.items[id]?.name||`Ball #${id}`);
-  let indexes={},pickerEntries=[];
+  let indexes={},pickerEntries=[],catalogEntries={},catalogControlId=0;
+  const touchLayout=()=>window.matchMedia('(max-width: 760px), (any-pointer: coarse)').matches;
+  const catalogLabel=kind=>({species:'species',moves:'move',abilities:'ability',items:'item'}[kind]||kind);
+  function updateViewport(){
+    const viewport=window.visualViewport;
+    document.documentElement.style.setProperty('--viewport-height',`${viewport?.height||window.innerHeight}px`);
+    document.documentElement.style.setProperty('--viewport-top',`${viewport?.offsetTop||0}px`);
+  }
+  updateViewport();window.addEventListener('resize',updateViewport);
+  window.visualViewport?.addEventListener('resize',updateViewport);
+  window.visualViewport?.addEventListener('scroll',updateViewport);
+  function closeDialog(dialog){
+    if(typeof dialog.close==='function')dialog.close();
+    else{dialog.removeAttribute('open');dialog.dispatchEvent(new Event('close'));}
+  }
+  function showDialog(dialog){
+    if(dialog.hasAttribute('open'))return;
+    const previous=document.activeElement;
+    let backdrop;
+    const trap=e=>{
+      if(e.key==='Escape'){e.preventDefault();closeDialog(dialog);return;}
+      if(e.key!=='Tab')return;
+      const controls=[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),a[href]')].filter(control=>control.getClientRects().length);
+      const first=controls[0],last=controls[controls.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
+    };
+    dialog.addEventListener('close',()=>{
+      backdrop?.remove();dialog.removeEventListener('keydown',trap);
+      if(!document.querySelector('dialog[open]'))document.body.classList.remove('dialog-open');
+      if(previous?.isConnected)previous.focus({preventScroll:true});
+    },{once:true});
+    document.body.classList.add('dialog-open');updateViewport();
+    if(typeof dialog.showModal==='function')dialog.showModal();
+    else{
+      backdrop=document.createElement('div');backdrop.className='dialog-backdrop';
+      backdrop.onclick=()=>closeDialog(dialog);document.body.append(backdrop);
+      dialog.setAttribute('open','');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+      dialog.addEventListener('keydown',trap);dialog.querySelector('button')?.focus();
+    }
+  }
+  function bindCatalogPickers(){
+    $('editor-panel').querySelectorAll('input[list]').forEach(input=>{
+      if(input.closest('.catalog-field'))return;
+      if(!input.id)input.id=`catalog-control-${++catalogControlId}`;
+      const kind=input.getAttribute('list').replace('list-','');
+      if(!catalogEntries[kind])return;
+      const button=document.createElement('button');button.type='button';button.className='catalog-browse';
+      button.textContent='⌕';button.title=`Choose ${catalogLabel(kind)}`;
+      button.setAttribute('aria-label',button.title);button.dataset.catalogInput=input.id;button.disabled=input.disabled;
+      const wrapper=document.createElement('div');wrapper.className='catalog-field';
+      const label=input.closest('label.field'),anchor=label||input;
+      anchor.before(wrapper);wrapper.append(anchor,button);
+    });
+  }
+  function openCatalogPicker(input){
+    if(!input||input.disabled)return;
+    const kind=input.getAttribute('list').replace('list-',''),entries=catalogEntries[kind];
+    if(!entries)return;
+    const dialog=document.createElement('dialog');dialog.id='catalog-picker';dialog.setAttribute('aria-labelledby','catalog-picker-title');
+    dialog.innerHTML='<div class="dialog-head"><h2 id="catalog-picker-title"></h2><button type="button" class="icon-button" id="close-catalog-picker" aria-label="Close chooser">×</button></div><label class="field"><span>Search by name or ID</span><input id="catalog-picker-filter" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search"></label><p id="catalog-picker-count" class="field-help" aria-live="polite"></p><div class="picker-body"><div id="catalog-picker-options"></div></div><button type="button" class="picker-more" id="catalog-picker-more">Show more options</button>';
+    dialog.querySelector('h2').textContent=`Choose ${catalogLabel(kind)}`;
+    document.body.append(dialog);
+    const filter=dialog.querySelector('#catalog-picker-filter'),list=dialog.querySelector('#catalog-picker-options'),count=dialog.querySelector('#catalog-picker-count'),more=dialog.querySelector('#catalog-picker-more');
+    let matches=entries,shown=0,frame;
+    const append=()=>{
+      const fragment=document.createDocumentFragment(),next=matches.slice(shown,shown+40);shown+=next.length;
+      for(const entry of next){
+        const button=document.createElement('button');button.type='button';button.className='picker-option';
+        const text=document.createElement('span'),name=document.createElement('b'),detail=document.createElement('small');
+        name.textContent=entry.value.name;detail.textContent=`#${entry.value.id}${entry.value.desc?' · '+entry.value.desc:''}`;
+        text.append(name,detail);button.append(text);
+        button.onclick=()=>{
+          closeDialog(dialog);if(!input.isConnected)return;
+          input.value=display(entry.value);input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));
+          if(!touchLayout())input.focus({preventScroll:true});
+        };
+        fragment.append(button);
+      }
+      list.append(fragment);count.textContent=`Showing ${shown} of ${matches.length.toLocaleString()} options`;
+      more.hidden=shown>=matches.length;
+    };
+    const draw=()=>{
+      const query=filter.value.trim().toLocaleLowerCase();matches=query?entries.filter(entry=>entry.search.includes(query)):entries;
+      shown=0;list.replaceChildren();dialog.querySelector('.picker-body').scrollTop=0;append();
+      if(!matches.length){const empty=document.createElement('p');empty.className='picker-help';empty.textContent='No options match your search.';list.append(empty);}
+    };
+    filter.oninput=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(draw);};more.onclick=append;
+    dialog.querySelector('#close-catalog-picker').onclick=()=>closeDialog(dialog);
+    dialog.addEventListener('close',()=>{cancelAnimationFrame(frame);dialog.remove();},{once:true});
+    showDialog(dialog);draw();if(!touchLayout())filter.focus();
+  }
   function notify(message,error=false){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').className=error?'error':'';$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,error?8500:4000);}
   function guard(){if(dirty){notify('Apply or discard your pending changes before switching views or exporting.',true);return false;}return true;}
   function fail(error){notify(error.message||String(error),true);}
@@ -14,28 +105,29 @@
   function resolve(kind,value,allowNone=false){
     const t=value.trim();if(allowNone&&!t)return 0;
     const number=/^(?:#)?(\d+)$/.exec(t)||/· #(\d+)$/.exec(t);let id=number?+number[1]:indexes[kind].get(t.toLocaleLowerCase());
-    if(id===undefined||!catalog[kind][id])throw new Error(`Choose a valid ${kind==='species'?'species':kind.slice(0,-1)} from the list, or enter its numeric ID.`);return id;
+    if(id===undefined||!catalog[kind][id])throw new Error(`Choose a valid ${catalogLabel(kind)} from the list, or enter its numeric ID.`);return id;
   }
   function buildLists(){
     document.querySelectorAll('datalist').forEach(e=>e.remove());indexes={};
     for(const kind of ['species','moves','abilities','items']){
       indexes[kind]=new Map();const list=document.createElement('datalist');list.id=`list-${kind}`;
       const entries=Object.values(catalog[kind]).sort((a,b)=>a.name.localeCompare(b.name));
+      catalogEntries[kind]=entries.map(value=>({value,search:`${value.name} ${value.id}`.toLocaleLowerCase()}));
       if(kind==='abilities'){
         const banned=new Set(catalog.config.banned);
-        pickerEntries=entries.filter(a=>a.id>0&&a.id<=catalog.config.modulus&&!banned.has(a.id)).map(a=>({id:a.id,search:`${a.name} ${a.desc||''} ${a.id}`.toLocaleLowerCase(),markup:`<button type="button" class="picker-option" data-target-ability="${a.id}"><span><b>${html(a.name)}</b><small>${html(a.desc||'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`}));
+        pickerEntries=entries.filter(a=>a.id>0&&a.id<=catalog.config.modulus&&!banned.has(a.id)).map(a=>({id:a.id,search:`${a.name} ${a.desc||''} ${a.id}`.toLocaleLowerCase(),markup:`<button type="button" class="picker-option" data-target-ability="${html(a.id)}"><span><b>${html(a.name)}</b><small>${html(a.desc||'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`}));
       }
       list.innerHTML=entries.map(e=>{indexes[kind].set(e.name.toLocaleLowerCase(),e.id);indexes[kind].set(display(e).toLocaleLowerCase(),e.id);return `<option value="${html(display(e))}"></option>`;}).join('');document.body.append(list);
     }
   }
   buildLists();
-  const numberField=(label,name,value,min,max)=>`<label class="field"><span>${label}</span><input name="${name}" type="number" value="${value}" min="${min}" max="${max}" required></label>`;
+  const numberField=(label,name,value,min,max)=>`<label class="field"><span>${html(label)}</span><input name="${html(name)}" type="number" value="${html(value)}" min="${html(min)}" max="${html(max)}" required></label>`;
   const catalogField=(label,name,kind,id)=>`<label class="field"><span>${label}</span><input name="${name}" list="list-${kind}" value="${html(display(catalog[kind][id])||`#${id}`)}" autocomplete="off" required></label>`;
   const selectField=(label,name,value,entries)=>`<label class="field"><span>${label}</span><select name="${name}">${entries.map((e,i)=>`<option value="${i}"${i===value?' selected':''}>${html(e)}</option>`).join('')}</select></label>`;
   const typeTags=types=>[...new Set(types)].map(i=>`<span class="type" style="--type:${typeColors[i]||'#777'}">${html(catalog.types[i]||'None')}</span>`).join('');
   function pokemonIcon(species){
-    const image=pokemonIcons[species?.key];
-    return `<span class="mon-emblem" aria-hidden="true">${image?`<img src="${image}" alt="" width="64" height="64" decoding="async">`:'<span class="unknown-mon-icon"></span>'}</span>`;
+    const image=ERHtml.pngSource(pokemonIcons[species?.key]);
+    return `<span class="mon-emblem" aria-hidden="true">${image?`<img src="${html(image)}" alt="" width="64" height="64" decoding="async">`:'<span class="unknown-mon-icon"></span>'}</span>`;
   }
   function searchDraft(){
     const key=`${ref?.kind}:${ref?.box??''}:${ref?.slot}`;
@@ -68,9 +160,9 @@
     const dialog=document.createElement('dialog');dialog.id='ability-picker';dialog.setAttribute('aria-labelledby','ability-picker-title');
     dialog.innerHTML=`<div class="dialog-head"><div><h2 id="ability-picker-title">Choose ${kind==='ability'?'an ability':'an innate'}</h2><p>${html(species.name)} · ${kind==='ability'?`Ability ${index+1}`:`Innate ${index+1}`}</p></div><button type="button" class="icon-button" id="close-ability-picker" aria-label="Close ability picker">×</button></div><div class="picker-body">${kind==='ability'?`<h3>AVAILABLE NOW</h3><p class="picker-help">Equip one of this Pokémon’s three current choices.</p><div class="picker-current-grid">${choices.map((id,slot)=>`<button type="button" data-equip-choice="${slot}" ${slot===m.abilitySlot?'disabled':''}><span>Slot ${slot+1}${slot===m.abilitySlot?' · Equipped':''}</span><b>${html(catalog.abilities[id]?.name||id)}</b><small>${html(catalog.abilities[id]?.desc||'')}</small></button>`).join('')}</div>`:''}${variable?`<h3>FIND A NEW COMBINATION</h3><p class="picker-help">Choose an ability to add to your combination search. Find a matching PID to apply it together with your other targets.</p><label class="field"><span>Search abilities</span><input id="ability-picker-filter" type="search" placeholder="Search by name, description, or ID" autocomplete="off"></label><p id="ability-picker-count" class="field-help" aria-live="polite"></p><div id="ability-picker-options" aria-label="Searchable abilities"></div>`:`<p class="notice">${catalog.config.banned.includes(source)?'This slot is excluded from ability randomization.':`The ${kind==='ability'?'ability':'innate'} randomizer is off in this save.`} ${kind==='ability'?'You can equip any of the current choices above.':'This innate stays fixed.'}</p>`}</div>`;
     let drawFrame;
-    document.body.append(dialog);dialog.addEventListener('close',()=>{cancelAnimationFrame(drawFrame);dialog.remove();},{once:true});$('close-ability-picker').onclick=()=>dialog.close();
+    document.body.append(dialog);dialog.addEventListener('close',()=>{cancelAnimationFrame(drawFrame);dialog.remove();},{once:true});$('close-ability-picker').onclick=()=>closeDialog(dialog);
     dialog.querySelectorAll('[data-equip-choice]').forEach(button=>button.onclick=()=>{
-      const slot=+button.dataset.equipChoice;dialog.close();
+      const slot=+button.dataset.equipChoice;closeDialog(dialog);
       apply(()=>save.editMon(ref,{abilitySlot:slot},`Equip ability ${slot+1} on ${m.nickname}`),'Equipped ability updated. Your search fields are preserved.');
     });
     if(variable){
@@ -78,14 +170,14 @@
       const more=document.createElement('button');more.type='button';more.id='ability-picker-more';more.className='picker-more';more.textContent='Show more abilities';more.hidden=true;list.after(more);
       let matches=[],shown=0;
       const append=()=>{
-        if(!dialog.open)return;
+        if(!dialog.hasAttribute('open'))return;
         const next=matches.slice(shown,shown+40);shown+=next.length;
         list.insertAdjacentHTML('beforeend',next.map(a=>a.markup).join(''));
         count.textContent=shown<matches.length?`Showing ${shown} of ${matches.length.toLocaleString()} abilities · Search covers the full list`:`${matches.length.toLocaleString()} searchable ${matches.length===1?'ability':'abilities'}`;
         more.hidden=shown>=matches.length;
       };
       const draw=()=>{
-        if(!dialog.open)return;
+        if(!dialog.hasAttribute('open'))return;
         const query=filter.value.trim().toLocaleLowerCase();matches=query?pickerEntries.filter(a=>a.search.includes(query)):pickerEntries;shown=0;
         list.replaceChildren();list.scrollTop=0;append();
         if(!matches.length)list.innerHTML='<p class="picker-help">No abilities match your search.</p>';
@@ -94,8 +186,8 @@
         const button=e.target.closest('[data-target-ability]');if(button){
           const ability=catalog.abilities[+button.dataset.targetAbility],draft=searchDraft(),preferred=kind==='ability'?0:index+1;
           const empty=draft.targets.findIndex(target=>!target.trim()),field=draft.matchMode==='any'&&draft.targets[preferred].trim()&&empty>=0?empty:preferred;
-          draft.targets[field]=display(ability);dialog.close();resetSearch();tab='randomizer';render();
-          $('target-'+field).focus();$('search-button').scrollIntoView({block:'center'});notify(`${ability.name} selected. Find combinations to apply it.`);
+          draft.targets[field]=display(ability);closeDialog(dialog);resetSearch();tab='randomizer';render();
+          if(!touchLayout())$('target-'+field).focus();$('search-button').scrollIntoView({block:'center'});notify(`${ability.name} selected. Find combinations to apply it.`);
         }
       };
       filter.oninput=()=>{cancelAnimationFrame(drawFrame);drawFrame=requestAnimationFrame(draw);};
@@ -103,7 +195,7 @@
       // Let the modal open before creating its first small batch of options.
       drawFrame=requestAnimationFrame(draw);
     }
-    dialog.showModal();if(variable)$('ability-picker-filter').focus();
+    showDialog(dialog);if(variable&&!touchLayout())$('ability-picker-filter').focus();
   }
   function heading(m,species=catalog.species[m.species]){
     const r=ERRng.evaluate(species,m.pid,m.abilitySlot,options(),catalog.config);
@@ -115,7 +207,7 @@
     const n=save.changedBytes();$('change-count').textContent=save.history.length;
     const t=save.trainer();$('save-meta').textContent=`Trainer ${t.name} · ${t.hours}h ${String(t.minutes).padStart(2,'0')}m · 128 KB · ${dirty?'Pending changes':n?`${n} bytes changed`:'Original loaded'}`;
     $('health-banner').className=`health-banner${save.damaged.length?' bad':''}`;
-    $('health-banner').innerHTML=save.damaged.length?`<span>⚠ ${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`:`<span>✓ All 20 section checksums pass</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${catalog.version} catalog</span>`;
+    $('health-banner').innerHTML=save.damaged.length?`<span>⚠ ${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`:`<span>✓ All 20 section checksums pass</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
   }
   function drawRoster(){
     document.querySelectorAll('[data-roster]').forEach(e=>e.classList.toggle('active',e.dataset.roster===roster));$('box-controls').hidden=roster!=='box';
@@ -129,10 +221,10 @@
   function apply(fn,message,{keepSearch=false}={}){try{rememberSearchDraft();fn();if(!keepSearch)resetSearch();dirty=false;sync();drawRoster();render();notify(message);}catch(e){fail(e);}}
   function render(){
     document.querySelectorAll('[data-tab]').forEach(e=>e.classList.toggle('active',e.dataset.tab===tab));
-    if(tab==='settings'){renderSettings();return;}if(tab==='review'){renderReview();return;}
+    if(tab==='settings'){renderSettings();bindCatalogPickers();return;}if(tab==='review'){renderReview();return;}
     const m=mon();if(!m||!m.species){$('editor-panel').innerHTML='<div class="panel empty-box">Select a Pokémon from your roster.</div>';return;}
     try{save.assertMon(m);}catch(e){$('editor-panel').innerHTML=`<div class="notice warning">${html(e.message)} Choose another Pokémon.</div>`;return;}
-    if(tab==='randomizer')renderRandomizer(m);else renderPokemon(m);
+    if(tab==='randomizer')renderRandomizer(m);else renderPokemon(m);bindCatalogPickers();
   }
   function renderPokemon(m){
     const s=catalog.species[m.species],stats=ERCore.calcStats(m,s,options(),options().difficulty===3&&save.flag(2893));
@@ -143,22 +235,22 @@
     ${numberField('Friendship','friendship',m.friendship,0,255)}${selectField('Poké Ball','ball',m.ball,ballNames())}${selectField('Shininess','shiny',m.shiny,['Normal','Star shiny','Square shiny','Special palette'])}
     ${selectField('Hidden Power type','hpType',m.hpType,[...catalog.types,'None'])}${numberField('Met level','metLevel',m.metLevel,0,100)}<label class="field"><span>Original trainer</span><input value="${html(m.otName)} · ${m.otid>>>0}" readonly></label>
     </div><div class="checkrow"><label><input name="egg" type="checkbox" ${m.egg?'checked':''}> Egg</label><label><input name="speedDown" type="checkbox" ${m.speedDown?'checked':''}> Zero Speed IV</label></div><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
-    <div class="two-columns"><section class="panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label,i)=>`<tr><td>${label}</td><td>${s.base[i]}</td><td><div class="stat-bar"><i style="width:${Math.min(100,s.base[i]/2.55)}%"></i></div></td><td>${(options().difficulty===3&&save.flag(2893))||(i===5&&m.speedDown)?0:31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a,b)=>a+b,0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs?'enabled':'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind==='party'?`HP ${m.hp}/${m.stats[0]}.`:'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
-    <section class="panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind==='party'?'MOVE / CURRENT PP':'MOVE'}</span></div><div class="moves-list">${m.moves.map((id,i)=>{const move=catalog.moves[id];return `<div class="move-row"><span class="ordinal">0${i+1}</span><input name="move${i+1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i+1}" required>${ref.kind==='party'?`<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${ERCore.maxPP(move)}" aria-label="Move ${i+1} PP" required>`:'<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power?`${move.power} power · `:''}${ERCore.maxPP(move)} max PP</span></div></div>`;}).join('')}</div><div class="form-footer"><p>All ${Object.keys(catalog.moves).length} moves, including IDs above 999.</p>${ref.kind==='party'?'<button type="button" id="max-pp">Restore PP</button>':''}</div></section></div>
+    <div class="two-columns"><section class="panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label,i)=>`<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100,s.base[i]/2.55)}%"></i></div></td><td>${(options().difficulty===3&&save.flag(2893))||(i===5&&m.speedDown)?0:31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a,b)=>a+b,0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs?'enabled':'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind==='party'?`HP ${m.hp}/${m.stats[0]}.`:'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
+    <section class="panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind==='party'?'MOVE / CURRENT PP':'MOVE'}</span></div><div class="moves-list">${m.moves.map((id,i)=>{const move=catalog.moves[id];return `<div class="move-row"><span class="ordinal">0${i+1}</span><input name="move${i+1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i+1}" required>${ref.kind==='party'?`<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i+1} PP" required>`:'<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power?`${html(move.power)} power · `:''}${html(ERCore.maxPP(move))} max PP</span></div></div>`;}).join('')}</div><div class="form-footer"><p>All ${Object.keys(catalog.moves).length} moves, including IDs above 999.</p>${ref.kind==='party'?'<button type="button" id="max-pp">Restore PP</button>':''}</div></section></div>
     <div class="panel form-footer"><p id="pending-note">Apply commits the whole Pokémon form. Ctrl+Z undoes it.</p><div class="actions-inline">${ref.kind==='party'?'<button type="button" id="heal-button">Heal Pokémon</button>':''}<button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply Pokémon changes</button></div></div>
     </fieldset></form>`;
     const form=$('pokemon-form');bindDirty(form);
     const evUpdate=()=>{$('ev-total').textContent=`${statLabels.reduce((sum,_,i)=>sum+(+form.elements[`ev${i}`].value||0),0)} / 510 EVs`;};
     form.querySelectorAll('[name^=ev]').forEach(e=>e.addEventListener('input',evUpdate));
     form.querySelectorAll('[data-ev]').forEach(e=>e.onclick=()=>{const spread=e.dataset.ev==='physical'?[4,252,0,0,0,252]:e.dataset.ev==='special'?[4,0,0,252,0,252]:[0,0,0,0,0,0];spread.forEach((n,i)=>form.elements[`ev${i}`].value=n);dirty=true;evUpdate();sync();});
-    for(let i=0;i<4;i++)form.elements[`move${i+1}`].addEventListener('change',()=>{try{const id=resolve('moves',form.elements[`move${i+1}`].value),move=catalog.moves[id];$('move-meta-'+i).innerHTML=typeTags(move.types)+`<span>${move.power?`${move.power} power · `:''}${ERCore.maxPP(move)} max PP</span>`;if(ref.kind==='party'){form.elements[`pp${i}`].max=ERCore.maxPP(move);form.elements[`pp${i}`].value=ERCore.maxPP(move);}}catch(e){fail(e);}});
+    for(let i=0;i<4;i++)form.elements[`move${i+1}`].addEventListener('change',()=>{try{const id=resolve('moves',form.elements[`move${i+1}`].value),move=catalog.moves[id];$('move-meta-'+i).innerHTML=typeTags(move.types)+`<span>${move.power?`${html(move.power)} power · `:''}${html(ERCore.maxPP(move))} max PP</span>`;if(ref.kind==='party'){form.elements[`pp${i}`].max=ERCore.maxPP(move);form.elements[`pp${i}`].value=ERCore.maxPP(move);}}catch(e){fail(e);}});
     $('max-pp')?.addEventListener('click',()=>{try{for(let i=0;i<4;i++)form.elements[`pp${i}`].value=ERCore.maxPP(catalog.moves[resolve('moves',form.elements[`move${i+1}`].value)]);dirty=true;sync();}catch(e){fail(e);}});
     $('heal-button')?.addEventListener('click',()=>{if(guard())apply(()=>save.heal(ref),'Pokémon healed.');});
     form.onsubmit=e=>{e.preventDefault();try{const get=name=>form.elements[name].value,patch={nickname:get('nickname'),species:resolve('species',get('species')),level:+get('level'),nature:+get('nature'),heldItem:resolve('items',get('heldItem')),abilitySlot:+get('abilitySlot'),friendship:+get('friendship'),ball:+get('ball'),shiny:+get('shiny'),hpType:+get('hpType'),metLevel:+get('metLevel'),egg:+form.elements.egg.checked,speedDown:+form.elements.speedDown.checked,evs:statLabels.map((_,i)=>+get(`ev${i}`))};if(patch.shiny!==m.shiny)patch.maxShiny=Math.max(m.maxShiny,patch.shiny);for(let i=0;i<4;i++)patch[`move${i+1}`]=resolve('moves',get(`move${i+1}`));if(ref.kind==='party')patch.pp=m.moves.map((_,i)=>+get(`pp${i}`));apply(()=>save.editMon(ref,patch,`Edit ${m.nickname||s.name} (${ref.kind==='party'?'party':`box ${ref.box+1}`}, slot ${ref.slot+1})`),'Pokémon changes applied.');}catch(error){fail(error);}};
   }
   function renderRandomizer(m){
     const s=catalog.species[m.species],on=options().abilityRng||options().innateRng,draft=searchDraft();matchMode=draft.matchMode;
-    $('editor-panel').innerHTML=`${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${catalog.config.modulus}-outcome randomizer.</p>${!on?'<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>':''}
+    $('editor-panel').innerHTML=`${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${html(catalog.config.modulus)}-outcome randomizer.</p>${!on?'<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>':''}
     <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode==='any'?'checked':''}> Match abilities in any order</label></div><div class="target-grid">${[0,1,2,3].map(i=>`<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on?'':'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="search-control"><button id="search-button" class="primary" ${!on||save.damaged.length?'disabled':''}>Find combinations ↗</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot+1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
     <div id="search-results"></div><section class="panel"><div class="panel-heading"><h2>PID & FORM PREVIEW</h2><span>Changing PID can change gender and randomized types</span></div><div class="field-grid"><label class="field"><span>PID · hexadecimal</span><input id="pid-input" value="${m.pid.toString(16).toUpperCase().padStart(8,'0')}" maxlength="8" pattern="[0-9A-Fa-f]{1,8}"></label><label class="field"><span>Preview species / Mega form</span><input id="preview-species" list="list-species" value="${html(display(s))}" autocomplete="off"></label><label class="field"><span>Preview ability slot</span><select id="preview-slot">${[0,1,2].map(i=>`<option value="${i}" ${i===m.abilitySlot?'selected':''}>Slot ${i+1}</option>`).join('')}</select></label></div><div class="form-footer"><p>Preview does not change species or PID until you apply a PID.</p><div class="actions-inline"><button id="preview-button">Preview</button><button id="reroll-button" ${save.damaged.length?'disabled':''}>Reroll PID</button><button id="apply-pid" class="primary" ${save.damaged.length?'disabled':''}>Apply PID</button></div></div><div id="pid-preview" style="margin-top:16px"></div></section>`;
     const updateMatchLabels=()=>{
@@ -178,7 +270,7 @@
     $('reroll-button').onclick=()=>{const value=crypto.getRandomValues(new Uint32Array(1))[0];apply(()=>save.editMon(ref,{pid:value},`Reroll ${m.nickname}`),'New PID applied.');};
   }
   function parsePID(){const s=$('pid-input').value.trim();if(!/^[a-f\d]{1,8}$/i.test(s))throw new Error('PID must contain 1–8 hexadecimal digits.');return parseInt(s,16)>>>0;}
-  function cancelSearch(){if(worker){worker.terminate();worker=null;}searchSession=null;if($('cancel-search'))$('cancel-search').hidden=true;if($('more-search'))$('more-search').hidden=true;if($('search-button'))$('search-button').disabled=!(options().abilityRng||options().innateRng)||!!save.damaged.length;}
+  function cancelSearch(){if(worker){worker.terminate();worker=null;}if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;}searchSession=null;if($('cancel-search'))$('cancel-search').hidden=true;if($('more-search'))$('more-search').hidden=true;if($('search-button'))$('search-button').disabled=!(options().abilityRng||options().innateRng)||!!save.damaged.length;}
   function resetSearch(){cancelSearch();searchResults=[];drawResults();if($('search-progress'))$('search-progress').textContent='';if($('search-meter'))$('search-meter').hidden=true;}
   function searchStatus(){
     if(!searchSession||!$('search-progress'))return;
@@ -199,10 +291,11 @@
       if(targets.every(t=>t===null))throw new Error('Choose at least one desired ability or innate.');
       const species=catalog.species[m.species];const request={species,options:options(),config:catalog.config,targets,matchMode,lockedSlot:$('lock-slot').checked?m.abilitySlot:null,keepGender:$('keep-gender').checked,pid:m.pid,limit:12};
       const code=$('rng-code').textContent+`\nlet pages;self.onmessage=async e=>{try{if(e.data.kind!=='next')pages=ERRng.searchPages(e.data,p=>self.postMessage({kind:'progress',value:p}));const page=await pages.next();self.postMessage({kind:'done',value:page.value});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
-      const url=URL.createObjectURL(new Blob([code],{type:'text/javascript'}));worker=new Worker(url);URL.revokeObjectURL(url);searchResults=[];searchSession={request,complete:false,busy:true,checked:0,percent:0,elapsed:0,started:performance.now()};drawResults();$('search-button').disabled=true;$('cancel-search').hidden=false;$('search-meter').hidden=false;searchStatus();
+      const url=URL.createObjectURL(new Blob([code],{type:'text/javascript'}));try{worker=new Worker(url);workerUrl=url;}catch(error){URL.revokeObjectURL(url);throw error;}searchResults=[];searchSession={request,complete:false,busy:true,checked:0,percent:0,elapsed:0,started:performance.now()};drawResults();$('search-button').disabled=true;$('cancel-search').hidden=false;$('search-meter').hidden=false;searchStatus();
       const searchWorker=worker;
       worker.onmessage=e=>{
         const data=e.data;if(worker!==searchWorker||!searchSession)return;
+        if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;}
         if(data.kind==='progress'){searchSession.checked=data.value.checked;searchSession.percent=data.value.percent;searchStatus();}
         else if(data.kind==='done'){
           const s=searchSession;s.elapsed+=performance.now()-s.started;s.busy=false;s.checked=data.value.checked;s.percent=data.value.percent;s.complete=data.value.complete;
@@ -232,7 +325,7 @@
   function renderSettings(){
     const o=options(),labels={abilityRng:'Ability randomizer',innateRng:'Innate randomizer',encounterRng:'Encounter randomizer',encLegendRng:'Legendary encounters',moveRng:'Move randomizer',typeRng:'Type randomizer',permMega:'Permanent Mega mode',enableEvs:'Enable EVs',autoEVGain:'Automatic EV gain',autoExpGain:'Automatic EXP gain',autoEvolution:'Automatic evolution',autoRun:'Auto run',permanentRepel:'Permanent repel'};
     $('editor-panel').innerHTML=`<div class="page-heading"><h1>Your game, configured.</h1><p>Read directly from your save. Only the selected option bits are changed.</p></div><p class="notice">Turning an ability, innate, or type randomizer on or off immediately changes derived results for every Pokémon. Encounter settings affect future encounters. Existing stored moves stay as saved; the move randomizer affects generated movesets.</p><form id="settings-form"><fieldset ${save.damaged.length?'disabled':''} style="padding:0;border:0;margin:0"><section class="panel"><div class="panel-heading"><h2>RUN RULES</h2><span>${save.badge()===9?'Champion clear':`${save.badge()} badge stage`} · Level cap ${save.cap()}</span></div><div class="field-grid">${selectField('Difficulty','difficulty',o.difficulty,['Easy','Ace','Elite','Hell'])}${selectField('Level caps','levelCaps',o.levelCaps,['Easy caps','More caps','Elite caps','Caps off'])}${selectField('Shiny rate','shinyRate',o.shinyRate,['1 / 1,024','1 / 128','1 / 5','Reserved mode (default odds)'])}</div><h3 class="settings-section">RANDOMIZERS</h3><div class="settings-grid">${Object.entries(labels).slice(0,6).map(([k,l])=>`<label class="switch-field">${l}<input name="${k}" type="checkbox" ${o[k]?'checked':''}></label>`).join('')}</div><h3 class="settings-section">PLAY OPTIONS</h3><div class="settings-grid">${Object.entries(labels).slice(6).map(([k,l])=>`<label class="switch-field">${l}<input name="${k}" type="checkbox" ${o[k]?'checked':''}></label>`).join('')}</div><div class="form-footer"><p>Stat-affecting settings also refresh party stat caches.</p><div class="actions-inline"><button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply game settings</button></div></div></section></fieldset></form>
-    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision. The bundled catalog is the published 2.65.4 snapshot; custom or newer ROMs need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled 2.65.4 data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json" hidden></section>`;
+    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision. The bundled catalog is the published 2.65.4 snapshot; custom or newer ROMs need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled 2.65.4 data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
     const form=$('settings-form');bindDirty(form);form.onsubmit=e=>{e.preventDefault();const patch={};for(const k of Object.keys(labels))patch[k]=+form.elements[k].checked;for(const k of ['difficulty','levelCaps','shinyRate'])patch[k]=+form.elements[k].value;apply(()=>save.editOptions(patch),'Game settings applied.');};
     $('import-catalog').onclick=()=>{if(guard())$('catalog-file').click();};$('catalog-file').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;if(file.size>30_000_000)throw new Error('Game data JSON is too large.');setCatalog(convertCatalog(JSON.parse(await file.text()),file.name));}catch(e){fail(e);}};
     $('reset-catalog').onclick=()=>{if(guard())setCatalog(builtin);};
@@ -259,11 +352,12 @@
     $('editor-panel').innerHTML=`<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c=>c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length?save.history.map((s,i)=>`<div class="history-item">${String(i+1).padStart(2,'0')} &nbsp; ${html(s)}</div>`).join(''):'<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count?'disabled':''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav')?'selected':''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm')?'selected':''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length?'disabled':''}>Download verified edited save ↗</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c=>`<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4,'0')}</code></td><td class="${c.valid?'ok':'bad-text'}">${c.valid?'✓ Valid':'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
     $('review-backup').onclick=backup;$('review-export').onclick=()=>exportSave($('extension').value);$('reset-all').onclick=()=>{save.reset();resetSearch();dirty=false;sync();drawRoster();render();notify('Restored the original save.');};
   }
-  function download(bytes,name,type='application/octet-stream'){const url=URL.createObjectURL(new Blob([bytes],{type}));const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);}
+  function download(bytes,name,type='application/octet-stream'){const url=URL.createObjectURL(new Blob([bytes],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.dataset.transientDownload='';document.body.append(a);a.click();setTimeout(()=>a.remove(),0);setTimeout(()=>URL.revokeObjectURL(url),60_000);}
   function backup(){download(save.original,filename.replace(/\.(sav|srm)$/i,'')+'.original.'+(filename.toLowerCase().endsWith('.srm')?'srm':'sav'));notify('Original backup downloaded.');}
   function exportSave(ext){if(!guard())return;try{const bytes=save.export();const suffix=ext|| (filename.toLowerCase().endsWith('.srm')?'srm':'sav');download(bytes,filename.replace(/\.(sav|srm)$/i,'')+'.edited.'+suffix);notify('Export verified: 20 valid sections, 128 KB.');sync();}catch(e){fail(e);}}
   async function load(file){
-    if(!file)return;if(!guard())return;
+    if(!file)return;if(!guard()){$('save-file').value='';return;}
+    if(file.size!==131072){$('save-file').value='';fail(new Error('Choose a 128 KB battery save (.sav or .srm). ROMs and savestates are not supported.'));return;}
     try{const next=new ERCore.Save(await file.arrayBuffer(),catalog);cancelSearch();save=next;searchDrafts.clear();filename=file.name;roster='party';ref={kind:'party',slot:0};tab='pokemon';box=0;dirty=false;searchResults=[];$('welcome').hidden=true;$('workspace').hidden=false;$('filename').textContent=filename;$('roster-filter').value='';$('box-select').innerHTML=Array.from({length:26},(_,i)=>`<option value="${i}">${html(save.boxName(i))} · ${save.box(i).filter(m=>m.species).length}/30</option>`).join('');sync();drawRoster();render();notify(save.damaged.length?'This save has checksum errors; editing is disabled.':'Save loaded and checked.',!!save.damaged.length);}catch(e){fail(e);}finally{$('save-file').value='';}
   }
   $('save-file').onchange=e=>load(e.target.files[0]);$('open-button').onclick=()=>{if(guard())$('save-file').click();};$('backup-button').onclick=backup;$('export-button').onclick=()=>exportSave();
@@ -273,9 +367,9 @@
   $('box-select').onchange=e=>{if(!guard()){e.target.value=box;return;}resetSearch();box=+e.target.value;ref=save.box(box).find(m=>m.species)?.ref||null;drawRoster();render();};
   $('roster-filter').oninput=()=>drawRoster();document.querySelectorAll('[data-tab]').forEach(e=>e.onclick=()=>{if(!guard())return;resetSearch();tab=e.dataset.tab;render();});
   document.addEventListener('keydown',e=>{if(!save||!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='z'||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;e.preventDefault();if(guard()){resetSearch();if(e.shiftKey)save.redo();else save.undo();sync();drawRoster();render();}});
-  $('help-button').onclick=()=>$('help-dialog').showModal();$('close-help').onclick=()=>$('help-dialog').close();
-  $('editor-panel').addEventListener('click',e=>{const button=e.target.closest('[data-pick-ability]');if(button)openAbilityPicker(button.dataset.pickAbility,+button.dataset.pickIndex);});
+  $('help-button').onclick=()=>showDialog($('help-dialog'));$('close-help').onclick=()=>closeDialog($('help-dialog'));
+  $('editor-panel').addEventListener('click',e=>{const chooser=e.target.closest('[data-catalog-input]');if(chooser){openCatalogPicker($(chooser.dataset.catalogInput));return;}const button=e.target.closest('[data-pick-ability]');if(button)openAbilityPicker(button.dataset.pickAbility,+button.dataset.pickIndex);});
   const dz=$('dropzone');dz.ondragover=e=>{e.preventDefault();dz.classList.add('drag');};dz.ondragleave=()=>dz.classList.remove('drag');dz.ondrop=e=>{e.preventDefault();dz.classList.remove('drag');load(e.dataTransfer.files[0]);};
-  $('offline-button').onclick=()=>{const parsed=new DOMParser().parseFromString(document.documentElement.outerHTML,'text/html');parsed.getElementById('welcome').removeAttribute('hidden');parsed.getElementById('workspace').setAttribute('hidden','');parsed.getElementById('editor-panel').innerHTML='';parsed.getElementById('roster-list').innerHTML='';parsed.getElementById('filename').textContent='';parsed.getElementById('save-meta').textContent='';parsed.getElementById('health-banner').innerHTML='';parsed.getElementById('box-select').innerHTML='';parsed.getElementById('toast').setAttribute('hidden','');parsed.querySelectorAll('datalist').forEach(e=>e.remove());download('<!doctype html>\n'+parsed.documentElement.outerHTML,'Redux Save Studio.html','text/html');};
+  $('offline-button').onclick=()=>{const parsed=new DOMParser().parseFromString(document.documentElement.outerHTML,'text/html');parsed.getElementById('welcome').removeAttribute('hidden');parsed.getElementById('workspace').setAttribute('hidden','');parsed.getElementById('editor-panel').innerHTML='';parsed.getElementById('roster-list').innerHTML='';parsed.getElementById('filename').textContent='';parsed.getElementById('save-meta').textContent='';parsed.getElementById('health-banner').innerHTML='';parsed.getElementById('box-select').innerHTML='';parsed.getElementById('toast').setAttribute('hidden','');parsed.querySelectorAll('datalist,dialog:not(#help-dialog),.dialog-backdrop,[data-transient-download]').forEach(e=>e.remove());parsed.body.classList.remove('dialog-open');download('<!doctype html>\n'+parsed.documentElement.outerHTML,'Redux Save Studio.html','text/html');};
   window.addEventListener('beforeunload',e=>{if(dirty||save?.changedBytes()){e.preventDefault();e.returnValue='';}});
 })();
