@@ -1,0 +1,10 @@
+{
+  "name": "elite-redux-save-studio",
+  "version": "1.2.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "start": "node scripts/serve.cjs"
+  }
+}
