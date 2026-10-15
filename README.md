@@ -2,7 +2,19 @@
 
 Build the editor with `npm run build`, then open the generated **Redux Save Studio.html** in a modern browser. The generated editor is a standalone offline application: no install, server, account, or internet connection is needed to use it. Your save is read and edited only in browser memory.
 
-The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` / `.srm` battery saves. It reads party Pokémon, all 26 PC boxes, and game settings. It edits existing Pokémon; it does not create/delete Pokémon, modify inventory, or convert older save formats.
+The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` / `.srm` battery saves. It reads and edits party Pokémon, all 26 PC boxes, game settings, the trainer card, money, PC box names and the bag. It does not convert older save formats.
+
+**Adding and organising Pokémon.** **＋ Add Pokémon** builds a new Pokémon (species, level, nature, shininess, moves suggested from its learnset) or imports a pasted Pokémon Showdown set. New Pokémon are created the way the game's `CreateBoxMon` does, with you as the original trainer. Each Pokémon can be moved or swapped between the party and any PC slot, duplicated into the first free slot, released, or copied out as a Showdown set. Pokémon moved into the party are fully healed, as on an in-game withdrawal. The party always keeps at least one Pokémon that is not an Egg. **Heal party** and **Max friendship** act on the whole party.
+
+**Showdown import.** Species (including forms such as `Garchomp-Mega`), nickname, item, level, EVs, nature, shininess, happiness, `IVs: 0 Spe` and moves are imported; anything missing from this game's data is skipped with a warning. Abilities come from the PID in Elite Redux, so if the requested ability is not one of the new Pokémon's three choices, the Ability lab opens with it filled in as a search target.
+
+**More Pokémon fields.** Original trainer name, trainer/secret ID and gender, met location, language, markings, the Alpha and fateful-encounter flags, and, for party Pokémon, current HP and status condition (sleep, poison, toxic, burn, freeze, paralysis, frostbite, bleed).
+
+**Trainer & bag tab.** Edit your trainer name, gender, Trainer/Secret ID and play time; by default, Pokémon you caught are updated to the new OT so they keep obeying. Edit money (up to ¥999,999) and Game Corner coins, rename all 26 PC boxes, and choose which items you own. Elite Redux stores the bag as one "owned" flag per item with unlimited uses, so items are toggled rather than counted; search, category and owned/missing filters plus bulk add/remove are available.
+
+**All option-menu settings.** Besides difficulty, level caps, randomizers and the other run rules, Game settings covers text speed, HP bar speed, battle animations, battle style, sound, button mode, window frame, battle UI skin, damage numbers, nickname prompts, player AI, individual colours and double battles.
+
+A Pokémon record the catalog does not recognise no longer prevents a save from opening: it is counted in the status banner and locked, while everything else stays editable.
 
 Features include species, nickname, experience-backed level, nature, EVs, held items, moves (including IDs over 999), current party PP, shiny palette, Poké Ball, friendship, Hidden Power type, egg state, ability slot, and zero Speed IV. Redux's other IVs are fixed at 31, with the game's Hell-mode exception. Party stats are refreshed when relevant fields change. Box Pokémon derive stats on withdrawal.
 
