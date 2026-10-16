@@ -122,13 +122,11 @@ async function runEngine(engine) {
     stage = `${engine}: welcome and save picker`;
     assert.equal((await page.goto(baseUrl)).status(), 200);
     await checkLayout(page, stage);
-    await page
-      .locator('#save-file')
-      .setInputFiles({
-        name: 'Mobile team with a long save filename for responsive layout checks.sav',
-        mimeType: 'application/octet-stream',
-        buffer: sample,
-      });
+    await page.locator('#save-file').setInputFiles({
+      name: 'Mobile team with a long save filename for responsive layout checks.sav',
+      mimeType: 'application/octet-stream',
+      buffer: sample,
+    });
     await page.locator('#pokemon-form').waitFor();
     for (const [width, height] of sizes) {
       await page.setViewportSize({ width, height });
@@ -230,13 +228,11 @@ async function runEngine(engine) {
       await fallback.locator('#help-button').tap();
       await fallback.locator('#help-dialog[open]').waitFor();
       await fallback.locator('#close-help').tap();
-      await fallback
-        .locator('#save-file')
-        .setInputFiles({
-          name: 'wrong.sav',
-          mimeType: 'application/octet-stream',
-          buffer: Buffer.alloc(16),
-        });
+      await fallback.locator('#save-file').setInputFiles({
+        name: 'wrong.sav',
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.alloc(16),
+      });
       assert.ok((await fallback.locator('#toast').textContent()).includes('128 KB'));
       assert.equal(await fallback.locator('#save-file').inputValue(), '');
       await fallback.locator('#demo-button').tap();

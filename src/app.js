@@ -132,7 +132,7 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'catalog-browse';
-      button.textContent = '⌕';
+      button.textContent = 'Browse';
       button.title = `Choose ${catalogLabel(kind)}`;
       button.setAttribute('aria-label', button.title);
       button.dataset.catalogInput = input.id;
@@ -154,7 +154,7 @@
     dialog.id = 'catalog-picker';
     dialog.setAttribute('aria-labelledby', 'catalog-picker-title');
     dialog.innerHTML =
-      '<div class="dialog-head"><h2 id="catalog-picker-title"></h2><button type="button" class="icon-button" id="close-catalog-picker" aria-label="Close chooser">×</button></div><label class="field"><span>Search by name or ID</span><input id="catalog-picker-filter" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search"></label><p id="catalog-picker-count" class="field-help" aria-live="polite"></p><div class="picker-body"><div id="catalog-picker-options"></div></div><button type="button" class="picker-more" id="catalog-picker-more">Show more options</button>';
+      '<div class="dialog-head"><h2 id="catalog-picker-title"></h2><button type="button" class="icon-button" id="close-catalog-picker" aria-label="Close chooser">Close</button></div><label class="field"><span>Search by name or ID</span><input id="catalog-picker-filter" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search"></label><p id="catalog-picker-count" class="field-help" aria-live="polite"></p><div class="picker-body"><div id="catalog-picker-options"></div></div><button type="button" class="picker-more" id="catalog-picker-more">Show more options</button>';
     dialog.querySelector('h2').textContent = `Choose ${catalogLabel(kind)}`;
     document.body.append(dialog);
     const filter = dialog.querySelector('#catalog-picker-filter'),
@@ -344,8 +344,8 @@
         choice = slot !== undefined;
       const picker = preview
         ? ''
-        : `<button type="button" class="ability-reload" data-pick-ability="${choice ? 'ability' : 'innate'}" data-pick-index="${choice ? slot : innateIndex}" aria-label="Choose ${choice ? 'ability' : 'innate'} ${(choice ? slot : innateIndex) + 1}" title="Choose an available ability">↻</button>`;
-      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' ↻' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small></div>`;
+        : `<button type="button" class="ability-reload" data-pick-ability="${choice ? 'ability' : 'innate'}" data-pick-index="${choice ? slot : innateIndex}" aria-label="Choose ${choice ? 'ability' : 'innate'} ${(choice ? slot : innateIndex) + 1}" title="Choose an available ability">Change</button>`;
+      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' (randomized)' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small></div>`;
     };
     return `<section class="ability-group" aria-label="Ability choices"><div class="ability-group-heading"><h2>ABILITY CHOICES</h2><span>${preview ? 'Preview only' : 'One equipped at a time'}</span></div><div class="abilities-list">${choices.map((id, i) => card(id, `ABILITY ${i + 1}`, opts.abilityRng, i)).join('')}</div></section><section class="ability-group" aria-label="Innate abilities"><div class="ability-group-heading"><h2>INNATES</h2></div><div class="abilities-list">${r.innates.map((id, i) => card(id, `INNATE ${i + 1}`, opts.innateRng, undefined, i)).join('')}</div></section>`;
   }
@@ -467,14 +467,14 @@
   }
   function heading(m, species = catalog.species[m.species]) {
     const r = ERRng.evaluate(species, m.pid, m.abilitySlot, options(), catalog.config);
-    return `<div class="mon-heading"><div class="mon-identity">${pokemonIcon(species)}<div><h1>${html(m.nickname || species.name)} ${m.shiny ? '✦' : ''}</h1><p>${html(species.name)} · Lv. ${m.level} · ${ERRng.gender(catalog.species[m.species], m.pid)} · ${ref.kind === 'party' ? `Party slot ${ref.slot + 1}` : `${html(save.boxName(ref.box))}, slot ${ref.slot + 1}`}</p><div class="types">${typeTags(r.types)}</div></div></div><span class="pill">${html(catalog.natures[m.nature])} nature</span></div>`;
+    return `<div class="mon-heading"><div class="mon-identity">${pokemonIcon(species)}<div><h1>${html(m.nickname || species.name)} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</h1><p>${html(species.name)} · Lv. ${m.level} · ${ERRng.gender(catalog.species[m.species], m.pid)} · ${ref.kind === 'party' ? `Party slot ${ref.slot + 1}` : `${html(save.boxName(ref.box))}, slot ${ref.slot + 1}`}</p><div class="types">${typeTags(r.types)}</div></div></div><span class="pill">${html(catalog.natures[m.nature])} nature</span></div>`;
   }
   function sync() {
     $('undo-button').disabled = !save.undoStack.length || dirty;
     $('redo-button').disabled = !save.redoStack.length || dirty;
     $('export-button').disabled = !!save.damaged.length || dirty;
     $('export-button').innerHTML =
-      `Export .${filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav'} <span>↗</span>`;
+      `Export .${filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav'} `;
     const n = save.changedBytes();
     $('change-count').textContent = save.history.length;
     const t = save.trainer();
@@ -482,8 +482,8 @@
       `Trainer ${t.name} · ${t.hours}h ${String(t.minutes).padStart(2, '0')}m · 128 KB · ${dirty ? 'Pending changes' : n ? `${n} bytes changed` : 'Original loaded'}`;
     $('health-banner').className = `health-banner${save.damaged.length ? ' bad' : ''}`;
     $('health-banner').innerHTML = save.damaged.length
-      ? `<span>⚠ ${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`
-      : `<span>✓ All 20 section checksums pass${save.invalidSlots().length ? ` · ⚠ ${save.invalidSlots().length} unrecognised Pokémon locked` : ''}</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
+      ? `<span>${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`
+      : `<span>All 20 section checksums pass${save.invalidSlots().length ? `. ${save.invalidSlots().length} unrecognised Pokémon locked` : ''}</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
   }
   function drawRoster() {
     drawRosterActions();
@@ -508,7 +508,7 @@
               ref.kind === m.ref.kind &&
               ref.slot === m.ref.slot &&
               (m.ref.kind === 'party' || ref.box === m.ref.box);
-            return `<button class="roster-item${active ? ' active' : ''}" data-slot="${m.ref.slot}" aria-pressed="${active}">${pokemonIcon(s)}<span class="roster-name"><b>${html(m.nickname || s?.name || 'Unknown')} ${m.shiny ? '✦' : ''}</b><small>${html(s?.name || `Species #${m.species}`)}</small></span><span class="level">${m.level}</span></button>`;
+            return `<button class="roster-item${active ? ' active' : ''}" data-slot="${m.ref.slot}" aria-pressed="${active}">${pokemonIcon(s)}<span class="roster-name"><b>${html(m.nickname || s?.name || 'Unknown')} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</b><small>${html(s?.name || `Species #${m.species}`)}</small></span><span class="level">${m.level}</span></button>`;
           })
           .join('')
       : `<div class="empty-box">${all.length ? 'No matching Pokémon.' : 'This box is empty.'}</div>`;
@@ -608,7 +608,7 @@
       'abilitySlot',
       m.abilitySlot,
       abilityChoices(s, m.pid).map(
-        (id, i) => `Slot ${i + 1} — ${catalog.abilities[id]?.name || `#${id}`}`,
+        (id, i) => `Slot ${i + 1}: ${catalog.abilities[id]?.name || `#${id}`}`,
       ),
     )}
     ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}${selectField('Shininess', 'shiny', m.shiny, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}
@@ -803,7 +803,7 @@
     const dialog = document.createElement('dialog');
     dialog.className = 'tool-dialog';
     dialog.setAttribute('aria-labelledby', 'tool-dialog-title');
-    dialog.innerHTML = `<div class="dialog-head"><div><h2 id="tool-dialog-title"></h2>${subtitle ? '<p class="dialog-sub"></p>' : ''}</div><button type="button" class="icon-button" data-close aria-label="Close">×</button></div><div class="dialog-body">${body}</div>`;
+    dialog.innerHTML = `<div class="dialog-head"><div><h2 id="tool-dialog-title"></h2>${subtitle ? '<p class="dialog-sub"></p>' : ''}</div><button type="button" class="icon-button" data-close>Close</button></div><div class="dialog-body">${body}</div>`;
     dialog.querySelector('h2').textContent = title;
     if (subtitle) dialog.querySelector('.dialog-sub').textContent = subtitle;
     document.body.append(dialog);
@@ -844,7 +844,7 @@
           occupied = party ? i < save.partyCount : !!save.mon(target).species;
         const disabled = same(target, exclude) || (occupied && !allowOccupied);
         if (!occupied && firstFree < 0 && !disabled) firstFree = i;
-        return `<option value="${i}"${disabled ? ' disabled' : ''}>Slot ${i + 1} · ${occupied ? html(slotLabel(target)) + (allowOccupied && !same(target, exclude) ? ' — swap' : '') : 'empty'}</option>`;
+        return `<option value="${i}"${disabled ? ' disabled' : ''}>Slot ${i + 1} · ${occupied ? html(slotLabel(target)) + (allowOccupied && !same(target, exclude) ? ' (swap)' : '') : 'empty'}</option>`;
       }).join('');
       const pick =
         preferred !== undefined && !slot.options[preferred]?.disabled
@@ -1458,7 +1458,7 @@
             .slice(0, 600)
             .map(sp => {
               const st = stateOf(sp.id);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.id) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.id}</small><select data-dex="${sp.id}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>—</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+              return `<div class="bag-item dex-item${dexDraft.has(sp.id) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.id}</small><select data-dex="${sp.id}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
             })
             .join('') +
           (list.length > 600
@@ -1577,7 +1577,7 @@
     matchMode = draft.matchMode;
     $('editor-panel').innerHTML =
       `${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${html(catalog.config.modulus)}-outcome randomizer.</p>${!on ? '<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>' : ''}
-    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations ↗</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
+    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
     <div id="search-results"></div><section class="panel"><div class="panel-heading"><h2>PID & FORM PREVIEW</h2><span>Changing PID can change gender and randomized types</span></div><div class="field-grid"><label class="field"><span>PID · hexadecimal</span><input id="pid-input" value="${m.pid.toString(16).toUpperCase().padStart(8, '0')}" maxlength="8" pattern="[0-9A-Fa-f]{1,8}"></label><label class="field"><span>Preview species / Mega form</span><input id="preview-species" list="list-species" value="${html(display(s))}" autocomplete="off"></label><label class="field"><span>Preview ability slot</span><select id="preview-slot">${[0, 1, 2].map(i => `<option value="${i}" ${i === m.abilitySlot ? 'selected' : ''}>Slot ${i + 1}</option>`).join('')}</select></label></div><div class="form-footer"><p>Preview does not change species or PID until you apply a PID.</p><div class="actions-inline"><button id="preview-button">Preview</button><button id="reroll-button" ${save.damaged.length ? 'disabled' : ''}>Reroll PID</button><button id="apply-pid" class="primary" ${save.damaged.length ? 'disabled' : ''}>Apply PID</button></div></div><div id="pid-preview" style="margin-top:16px"></div></section>`;
     const updateMatchLabels = () => {
       for (let i = 0; i < 4; i++)
@@ -1651,7 +1651,7 @@
   }
   function parsePID() {
     const s = $('pid-input').value.trim();
-    if (!/^[a-f\d]{1,8}$/i.test(s)) throw new Error('PID must contain 1–8 hexadecimal digits.');
+    if (!/^[a-f\d]{1,8}$/i.test(s)) throw new Error('PID must contain 1 to 8 hexadecimal digits.');
     return parseInt(s, 16) >>> 0;
   }
   function cancelSearch() {
@@ -1682,7 +1682,7 @@
     const s = searchSession,
       elapsed = s.elapsed + (s.busy ? performance.now() - s.started : 0);
     $('search-progress').textContent =
-      `${searchResults.length} verified matches loaded · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching for more…' : s.complete ? 'Search complete — all matches loaded' : 'More matches can be searched below'}`;
+      `${searchResults.length} verified matches loaded · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching for more…' : s.complete ? 'Search complete. All matches loaded.' : 'More matches can be searched below'}`;
     $('search-meter').value = s.percent;
   }
   function loadMoreSearch() {
@@ -1809,12 +1809,16 @@
     $('search-results').innerHTML =
       (searchResults.length
         ? `<div class="result-heading"><h2>SEARCH MATCHES</h2><span>${searchResults.length.toLocaleString()} loaded · Click a row to apply</span></div>`
-        : '') +
+        : searchSession?.busy
+          ? '<div aria-hidden="true">' +
+            '<div class="skeleton-row"><span></span><span></span></div>'.repeat(3) +
+            '</div>'
+          : '') +
       searchResults
         .map((r, i) => {
           const selected = current?.pid === r.pid && current.abilitySlot === r.slot,
             pid = r.pid.toString(16).toUpperCase().padStart(8, '0');
-          return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' ✓' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied ✓' : 'Use this PID'}</span></button>`;
+          return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' (equipped)' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied' : 'Use this PID'}</span></button>`;
         })
         .join('') +
       (searchSession && !searchSession.complete
@@ -2057,7 +2061,7 @@
     const count = save.changedBytes(),
       checks = save.report();
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save ↗</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? '✓ Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
+      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? 'Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
     $('review-backup').onclick = backup;
     $('review-export').onclick = () => exportSave($('extension').value);
     $('reset-all').onclick = () => {
@@ -2236,6 +2240,13 @@
       render();
     }
   });
+  for (const [button, dialog] of [
+    ['privacy-button', 'privacy-dialog'],
+    ['terms-button', 'terms-dialog'],
+  ]) {
+    $(button).onclick = () => showDialog($(dialog));
+    $(dialog).querySelector('[data-close-legal]').onclick = () => closeDialog($(dialog));
+  }
   $('help-button').onclick = () => showDialog($('help-dialog'));
   $('close-help').onclick = () => closeDialog($('help-dialog'));
   $('editor-panel').addEventListener('click', e => {
@@ -2271,7 +2282,7 @@
     parsed.getElementById('toast').setAttribute('hidden', '');
     parsed
       .querySelectorAll(
-        'datalist,dialog:not(#help-dialog),.dialog-backdrop,[data-transient-download]',
+        'datalist,dialog:not(#help-dialog):not(#privacy-dialog):not(#terms-dialog),.dialog-backdrop,[data-transient-download]',
       )
       .forEach(e => e.remove());
     parsed.body.classList.remove('dialog-open');
