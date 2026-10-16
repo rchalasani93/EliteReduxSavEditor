@@ -29,16 +29,14 @@
     <main>
       <section id="welcome">
         <div class="hero">
-          <p class="eyebrow">YOUR TEAM. YOUR RULES.</p>
-          <h1>A better workshop<br />for your <em>next run.</em></h1>
+          <h1>Edit your Elite Redux save</h1>
           <p class="lede">
-            Tune your party, organize your PC, and find the ability combination you’ve been chasing.
-            Every export gets checked.
+            Open a battery save from your emulator, change your Pokémon, items and settings, and
+            download a checked copy. Your original file stays untouched.
           </p>
         </div>
         <label class="dropzone" id="dropzone" for="save-file"
-          ><span class="upload-icon" aria-hidden="true">↥</span>
-          <h2>Open your Elite Redux save</h2>
+          ><h2>Open your Elite Redux save</h2>
           <p>Drop a .sav or .srm here, or <span class="link-text">choose a file</span></p>
           <small>128 KB battery saves · Modern 20-section format</small
           ><input
@@ -56,34 +54,34 @@
             "
         /></label>
         <div style="text-align: center; margin: -18px 0 32px">
-          <button class="text-button" id="demo-button">Explore with a demo save →</button>
+          <button class="text-button" id="demo-button">Try it with a demo save</button>
         </div>
-        <div class="features">
-          <article>
-            <span>01 / POKÉMON</span>
-            <h3>The whole roster.</h3>
-            <p>
-              Party and all 26 PC boxes. Add, move, release and import Pokémon, then tune species,
-              moves, EVs, nature, items and more.
-            </p>
-          </article>
-          <article>
-            <span>02 / RANDOMIZER</span>
-            <h3>Search with purpose.</h3>
-            <p>
-              Choose abilities and innates. The search runs in a worker, with verified results and
-              cancellation.
-            </p>
-          </article>
-          <article>
-            <span>03 / SAVE SETTINGS</span>
-            <h3>Make it your game.</h3>
-            <p>
-              Difficulty, level caps, randomizers, every option-menu setting, plus your trainer
-              card, money and bag.
-            </p>
-          </article>
-        </div>
+        <dl class="capabilities">
+          <dt>Pokémon</dt>
+          <dd>
+            Party and all 26 PC boxes: add, move, release or import from Showdown, then change
+            species, moves, EVs, nature, items and origin.
+          </dd>
+          <dt>Abilities</dt>
+          <dd>
+            Search for a PID that gives the ability and innates you want. Every result is checked
+            against the game's randomizer.
+          </dd>
+          <dt>Trainer and bag</dt>
+          <dd>
+            Name, IDs, play time, money, coins, Battle Points, box names and wallpapers, and every
+            item in your bag.
+          </dd>
+          <dt>Progress</dt>
+          <dd>
+            Pokédex seen and caught, game stats, nuzlocke route tracking and the in-game clock.
+          </dd>
+          <dt>Settings</dt>
+          <dd>
+            Difficulty, level caps, randomizers and every option-menu setting, including battle and
+            overworld speed.
+          </dd>
+        </dl>
         <p class="welcome-note">
           Works offline. No account needed for the downloaded editor. Your original file is never
           overwritten.
@@ -96,15 +94,15 @@
             <button id="open-button" class="quiet">Open another</button
             ><button id="backup-button" class="quiet">Original backup</button
             ><button id="undo-button" class="icon-button" title="Undo (Ctrl+Z)" aria-label="Undo">
-              ↶</button
+              Undo</button
             ><button
               id="redo-button"
               class="icon-button"
               title="Redo (Ctrl+Shift+Z)"
               aria-label="Redo"
             >
-              ↷</button
-            ><button id="export-button" class="primary">Export .sav <span>↗</span></button>
+              Redo</button
+            ><button id="export-button" class="primary">Export .sav</button>
           </div>
         </div>
         <div id="health-banner" class="health-banner"></div>
@@ -124,7 +122,6 @@
             </div>
             <div id="roster-actions" class="roster-actions"></div>
             <label class="filter-wrap"
-              ><span aria-hidden="true">⌕</span
               ><input
                 id="roster-filter"
                 type="search"
@@ -148,16 +145,18 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.4.0</span></span
-        ><span>Built for the modern Elite Redux save format</span
-        ><button id="offline-button" class="text-button">Download offline editor ↓</button>
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.4.1</span></span
+        ><span class="footer-links"
+          ><button id="privacy-button" class="text-button">Privacy</button
+          ><button id="terms-button" class="text-button">Terms</button></span
+        ><button id="offline-button" class="text-button">Download offline editor</button>
       </footer>
     </main>
     <div id="toast" role="status" aria-live="polite" hidden></div>
     <dialog id="help-dialog" aria-labelledby="help-dialog-title">
       <div class="dialog-head">
         <h2 id="help-dialog-title">From edit to in-game.</h2>
-        <button id="close-help" class="icon-button" aria-label="Close help">×</button>
+        <button id="close-help" class="icon-button" aria-label="Close help">Close</button>
       </div>
       <ol>
         <li>
@@ -197,6 +196,59 @@
           >ER Nextdex</a
         >
       </p>
+    </dialog>
+    <dialog id="privacy-dialog" class="legal" aria-labelledby="privacy-title">
+      <div class="dialog-head">
+        <h2 id="privacy-title">Privacy</h2>
+        <button type="button" class="icon-button" data-close-legal>Close</button>
+      </div>
+      <p>Last updated October 2026.</p>
+      <h3>Your save file</h3>
+      <p>
+        The editor reads and edits your save entirely inside your browser. The file is never
+        uploaded, sent to a server or stored anywhere after you close the page. Downloads (backups
+        and edited saves) are created on your own device.
+      </p>
+      <h3>What the editor collects</h3>
+      <p>
+        Nothing. There are no accounts, cookies, analytics, ads or tracking scripts, and the page
+        makes no network requests after it loads. Pokémon artwork and game data are built into the
+        page.
+      </p>
+      <h3>Hosting</h3>
+      <p>
+        The online version is served by GitHub Pages. GitHub may log basic request information such
+        as your IP address when the page is loaded; see GitHub's privacy statement. The downloaded
+        offline editor makes no requests at all.
+      </p>
+      <h3>Questions</h3>
+      <p>Open an issue on the project's GitHub repository.</p>
+    </dialog>
+    <dialog id="terms-dialog" class="legal" aria-labelledby="terms-title">
+      <div class="dialog-head">
+        <h2 id="terms-title">Terms of use</h2>
+        <button type="button" class="icon-button" data-close-legal>Close</button>
+      </div>
+      <p>Last updated October 2026.</p>
+      <h3>Use at your own risk</h3>
+      <p>
+        Redux Save Studio is a free, unofficial fan tool provided as is, without warranty of any
+        kind. It checks every export, but editing a save can still cause problems in a game,
+        especially with a different ROM build. Always keep a backup of your original save.
+      </p>
+      <h3>No affiliation</h3>
+      <p>
+        This project is not affiliated with or endorsed by Nintendo, Game Freak, The Pokémon Company
+        or the Elite Redux team. Pokémon names and artwork belong to their respective owners. Game
+        data comes from the Elite Redux source and ER Nextdex.
+      </p>
+      <h3>Your responsibility</h3>
+      <p>
+        Only edit saves you own, and follow the rules of any community, event or challenge you take
+        part in. Edited saves should not be used to misrepresent achievements.
+      </p>
+      <h3>Changes</h3>
+      <p>These terms may be updated with new releases; the date above shows the latest version.</p>
     </dialog>
     <script id="catalog" type="application/json">
       /* CATALOG */
