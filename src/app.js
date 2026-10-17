@@ -485,20 +485,44 @@
       ? `<span>${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`
       : `<span>All 20 section checksums pass${save.invalidSlots().length ? `. ${save.invalidSlots().length} unrecognised Pokémon locked` : ''}</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
   }
+  // Text a roster entry can be found by: nickname, species name, base species (so "Absol" finds
+  // "Absol Mega"), dex number and types.
+  function rosterSearchText(m) {
+    const s = catalog.species[m.species];
+    if (!s) return `${m.nickname} #${m.species}`.toLocaleLowerCase();
+    const types = [...new Set(s.types)].map(t => catalog.types[t]).join(' ');
+    return `${m.nickname} ${s.name} ${ERCore.baseSpeciesName(catalog, s)} #${s.id} ${types}`.toLocaleLowerCase();
+  }
+  function locationLabel(r) {
+    return r.kind === 'party'
+      ? `Party slot ${r.slot + 1}`
+      : `${save.boxName(r.box)}, slot ${r.slot + 1}`;
+  }
   function drawRoster() {
     drawRosterActions();
     document
       .querySelectorAll('[data-roster]')
       .forEach(e => e.classList.toggle('active', e.dataset.roster === roster));
     $('box-controls').hidden = roster !== 'box';
-    const all = roster === 'party' ? save.party() : save.box(box).filter(m => m.species);
-    const filter = $('roster-filter').value.toLocaleLowerCase();
-    const mons = all.filter(m =>
-      (m.nickname + ' ' + (catalog.species[m.species]?.name || ''))
-        .toLocaleLowerCase()
-        .includes(filter),
-    );
-    $('roster-count').textContent = `${all.length} Pokémon`;
+    const query = $('roster-filter').value.trim().toLocaleLowerCase();
+    const everywhere = !!query && $('roster-scope').checked;
+    const all = everywhere
+      ? save.allMons()
+      : roster === 'party'
+        ? save.party()
+        : save.box(box).filter(m => m.species);
+    const terms = query.split(/\s+/).filter(Boolean);
+    const mons = all.filter(m => {
+      const text = rosterSearchText(m);
+      return terms.every(t =>
+        /^#\d+$/.test(t) ? catalog.species[m.species]?.id === +t.slice(1) : text.includes(t),
+      );
+    });
+    $('roster-count').textContent = everywhere
+      ? `${mons.length} found`
+      : query
+        ? `${mons.length} of ${all.length}`
+        : `${all.length} Pokémon`;
     $('roster-list').innerHTML = mons.length
       ? mons
           .map(m => {
@@ -508,10 +532,19 @@
               ref.kind === m.ref.kind &&
               ref.slot === m.ref.slot &&
               (m.ref.kind === 'party' || ref.box === m.ref.box);
-            return `<button class="roster-item${active ? ' active' : ''}" data-slot="${m.ref.slot}" aria-pressed="${active}">${pokemonIcon(s)}<span class="roster-name"><b>${html(m.nickname || s?.name || 'Unknown')} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</b><small>${html(s?.name || `Species #${m.species}`)}</small></span><span class="level">${m.level}</span></button>`;
+            const detail = everywhere
+              ? `${html(s?.name || `Species #${m.species}`)} · ${html(locationLabel(m.ref))}`
+              : html(s?.name || `Species #${m.species}`);
+            return `<button class="roster-item${active ? ' active' : ''}" data-kind="${m.ref.kind}" data-box="${m.ref.box ?? ''}" data-slot="${m.ref.slot}" aria-pressed="${active}">${pokemonIcon(s)}<span class="roster-name"><b>${html(m.nickname || s?.name || 'Unknown')} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</b><small>${detail}</small></span><span class="level">${m.level}</span></button>`;
           })
           .join('')
-      : `<div class="empty-box">${all.length ? 'No matching Pokémon.' : 'This box is empty.'}</div>`;
+      : `<div class="empty-box">${
+          query
+            ? everywhere
+              ? 'No Pokémon in your party or PC match that search.'
+              : 'No matching Pokémon here. Tick “Search all boxes” to look everywhere.'
+            : 'This box is empty.'
+        }</div>`;
     $('roster-list')
       .querySelectorAll('[data-slot]')
       .forEach(
@@ -520,9 +553,15 @@
             if (!guard()) return;
             resetSearch();
             ref =
-              roster === 'party'
+              e.dataset.kind === 'party'
                 ? { kind: 'party', slot: +e.dataset.slot }
-                : { kind: 'box', box, slot: +e.dataset.slot };
+                : { kind: 'box', box: +e.dataset.box, slot: +e.dataset.slot };
+            if (!everywhere) {
+              roster = ref.kind;
+            } else if (ref.kind === 'box') {
+              box = ref.box;
+              $('box-select').value = String(box);
+            }
             searchResults = [];
             drawRoster();
             render();
@@ -2212,6 +2251,7 @@
     render();
   };
   $('roster-filter').oninput = () => drawRoster();
+  $('roster-scope').onchange = () => drawRoster();
   document.querySelectorAll('[data-tab]').forEach(
     e =>
       (e.onclick = () => {

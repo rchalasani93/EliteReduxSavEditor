@@ -125,9 +125,13 @@
               ><input
                 id="roster-filter"
                 type="search"
-                placeholder="Find a Pokémon…"
-                aria-label="Filter roster"
+                placeholder="Search by species, nickname or type"
+                aria-label="Search Pokémon by species, nickname or type"
+                autocomplete="off"
             /></label>
+            <label class="roster-scope"
+              ><input id="roster-scope" type="checkbox" checked /> Search all boxes and party</label
+            >
             <div id="roster-list"></div>
             <div class="roster-footer"><span class="tiny-led"></span> Editing a copy in memory</div>
           </aside>
@@ -145,7 +149,7 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.4.1</span></span
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.4.2</span></span
         ><span class="footer-links"
           ><button id="privacy-button" class="text-button">Privacy</button
           ><button id="terms-button" class="text-button">Terms</button></span
