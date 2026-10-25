@@ -2372,8 +2372,13 @@ details.panel[open] > summary {
     flex-wrap: wrap;
   }
   form.is-dirty .form-footer:has(button[type='submit']) > p,
-  .panel.is-dirty > .form-footer > p {
+  .panel.is-dirty > .form-footer > p:not(.warning-text) {
     display: none;
+  }
+  .panel.is-dirty > .form-footer > p.warning-text {
+    flex-basis: 100%;
+    order: 1;
+    margin: 0;
   }
 }
 @media (any-pointer: coarse) {
@@ -2533,6 +2538,7 @@ details.panel[open] > summary {
   margin-left: 6px;
   padding: 5px 10px;
 }
-.warning-text {
+.warning-text,
+.form-footer p.warning-text {
   color: #e6b25c;
 }

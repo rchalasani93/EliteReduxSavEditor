@@ -2591,9 +2591,27 @@
     document.querySelectorAll('[data-dex-bulk]').forEach(
       b =>
         (b.onclick = () => {
-          const st = b.dataset.dexBulk;
-          shown().forEach(sp => setState(sp.no, st));
+          const st = b.dataset.dexBulk,
+            limit = save.pokedex().limit;
+          // Never go past the 999 seen the game can draw: mark in Pokédex order until full.
+          let seen = entries.filter(sp => stateOf(sp.no) !== 'none').length,
+            skipped = 0;
+          for (const sp of shown()) {
+            if (st !== 'none' && stateOf(sp.no) === 'none') {
+              if (seen >= limit) {
+                skipped++;
+                continue;
+              }
+              seen++;
+            }
+            setState(sp.no, st);
+          }
           draw();
+          if (skipped)
+            notify(
+              `${skipped} left unmarked: the game's Pokédex crashes at 1,000 seen, so it stops at ${limit}. Clear others to make room for them.`,
+              true,
+            );
         }),
     );
     $('dex-add-pc').onclick = () => openBulkAddDialog('caught');
