@@ -638,6 +638,10 @@
       renderProgress();
       return;
     }
+    if (tab === 'finder') {
+      renderFinder();
+      return;
+    }
     const m = mon();
     if (!m || !m.species) {
       $('editor-panel').innerHTML =
@@ -654,6 +658,273 @@
     if (tab === 'randomizer') renderRandomizer(m);
     else renderPokemon(m);
     bindCatalogPickers();
+  }
+  // ---- Species finder: every species that can roll a set of abilities ------------------------
+  const finder = { targets: ['', '', '', ''], type: '', minTotal: 0, results: [], run: null };
+  function finderSpecies() {
+    const battleForms = new Set();
+    for (const sp of Object.values(catalog.species))
+      for (const f of sp.forms || []) battleForms.add(f);
+    const type = finder.type === '' ? null : +finder.type;
+    return Object.values(catalog.species).filter(
+      sp =>
+        sp.id > 0 &&
+        !battleForms.has(sp.id) &&
+        sp.abilities.some(Boolean) &&
+        (type === null || sp.types.includes(type)) &&
+        sp.base.reduce((s, n) => s + n, 0) >= finder.minTotal,
+    );
+  }
+  function stopFinder() {
+    const run = finder.run;
+    if (!run) return;
+    run.workers.forEach(w => w.terminate());
+    URL.revokeObjectURL(run.url);
+    run.busy = false;
+    run.stopped = run.done < run.total;
+  }
+  function finderStatus() {
+    const run = finder.run;
+    if (!run || !$('finder-progress')) return;
+    const seconds = ((run.busy ? performance.now() : run.ended) - run.started) / 1000;
+    $('finder-progress').textContent =
+      `${finder.results.length} species found · ${run.done} of ${run.total} ability layouts checked · ${seconds.toFixed(1)}s${run.busy ? ' · searching…' : run.stopped ? ' · stopped' : ' · complete'}`;
+    $('finder-meter').hidden = !run.busy;
+    $('finder-meter').value = run.total ? (run.done / run.total) * 100 : 100;
+    $('finder-start').disabled = run.busy || !!save.damaged.length;
+    $('finder-stop').hidden = !run.busy;
+  }
+  function drawFinderResults() {
+    if (!$('finder-results')) return;
+    const list = finder.results
+      .slice()
+      .sort((a, b) => a.species - b.species)
+      .slice(0, 400);
+    const name = id => html(catalog.abilities[id]?.name || `#${id}`);
+    const wanted = new Set(finder.run?.targets || []);
+    const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
+    $('finder-results').innerHTML = list.length
+      ? `<div class="result-heading"><h2>SPECIES THAT CAN HAVE THEM</h2><span>${finder.results.length.toLocaleString()} found${finder.results.length > 400 ? ' · showing the first 400' : ''}</span></div><div class="finder-list">${list
+          .map(r => {
+            const sp = catalog.species[r.species];
+            return `<div class="finder-row">${pokemonIcon(sp)}<div class="finder-main"><b>${html(sp.name)}</b><small>#${html(sp.id)} · ${html(ERRng.gender(sp, r.pid))} · PID ${html(r.pid.toString(16).toUpperCase().padStart(8, '0'))}</small><div class="types">${typeTags(r.types)}</div></div><p class="finder-abilities">Ability ${html(r.slot + 1)}: ${mark(r.ability)}<br>Innates: ${r.innates.map(mark).join(', ')}</p><button type="button" data-finder-add="${html(r.species)}" ${save.damaged.length ? 'disabled' : ''}>Add…</button></div>`;
+          })
+          .join('')}</div>`
+      : finder.run && !finder.run.busy && !finder.run.stopped
+        ? '<p class="notice">No species can roll all of these together with the current randomizer settings.</p>'
+        : '';
+  }
+  // Worker messages are not trusted for display: keep only the species, PID and slot
+  // as checked numbers and recompute the abilities and types here.
+  function trustedFinderResult(r) {
+    const species = Number(r?.species),
+      pid = Number(r?.pid),
+      slot = Number(r?.slot);
+    if (
+      !Number.isInteger(species) ||
+      !catalog.species[species] ||
+      !Number.isInteger(pid) ||
+      pid < 0 ||
+      pid > 0xffffffff ||
+      ![0, 1, 2].includes(slot)
+    )
+      return null;
+    const result = ERRng.evaluate(
+      catalog.species[species],
+      pid,
+      slot,
+      finder.run.options,
+      catalog.config,
+    );
+    const values = [result.ability, ...result.innates];
+    const targets = finder.run.targets;
+    if (targets.some(t => values.filter(v => v === t).length < targets.filter(x => x === t).length))
+      return null;
+    return { species, pid, slot, ...result };
+  }
+  let finderDrawTimer = 0;
+  // Pages arrive once per layout; redraw at most a few times a second.
+  function scheduleFinderDraw() {
+    if (finderDrawTimer) return;
+    finderDrawTimer = setTimeout(() => {
+      finderDrawTimer = 0;
+      drawFinderResults();
+      finderStatus();
+    }, 250);
+  }
+  function startFinder() {
+    try {
+      stopFinder();
+      const opts = options();
+      const targets = finder.targets.filter(t => t.trim()).map(t => resolve('abilities', t));
+      if (!targets.length) throw new Error('Choose at least one ability or innate.');
+      const groups = ERRng.groupLayouts(finderSpecies());
+      if (!groups.length) throw new Error('No species match the type and stat filters.');
+      const code =
+        $('rng-code').textContent +
+        `\nself.onmessage=async e=>{try{for await(const page of ERRng.findSpecies(e.data))self.postMessage({kind:'page',value:page});self.postMessage({kind:'end'});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
+      const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      const count = Math.max(
+        1,
+        Math.min(8, (navigator.hardwareConcurrency || 4) - 1, groups.length),
+      );
+      const run = {
+        targets,
+        options: opts,
+        url,
+        workers: [],
+        total: groups.length,
+        done: 0,
+        finished: 0,
+        busy: true,
+        stopped: false,
+        started: performance.now(),
+        ended: 0,
+      };
+      finder.run = run;
+      finder.results = [];
+      for (let i = 0; i < count; i++) {
+        const worker = new Worker(url);
+        worker.onmessage = e => {
+          if (finder.run !== run) return;
+          const data = e.data;
+          if (data.kind === 'page') {
+            run.done++;
+            if (data.value.found.length) {
+              finder.results.push(...data.value.found.map(trustedFinderResult).filter(Boolean));
+              scheduleFinderDraw();
+            }
+          } else if (data.kind === 'end') {
+            if (++run.finished === count) {
+              run.busy = false;
+              run.ended = performance.now();
+              stopFinder();
+            }
+          } else {
+            run.ended = performance.now();
+            stopFinder();
+            fail(new Error(data.message));
+          }
+          scheduleFinderDraw();
+        };
+        worker.onerror = e => {
+          if (finder.run !== run) return;
+          run.ended = performance.now();
+          stopFinder();
+          finderStatus();
+          fail(new Error(e.message || 'Species search failed.'));
+        };
+        run.workers.push(worker);
+        // Round-robin so every worker gets a similar mix of easy and hard layouts.
+        worker.postMessage({
+          groups: groups.filter((_, n) => n % count === i),
+          options: opts,
+          config: catalog.config,
+          targets,
+          pid: crypto.getRandomValues(new Uint32Array(1))[0],
+        });
+      }
+      drawFinderResults();
+      finderStatus();
+    } catch (e) {
+      fail(e);
+    }
+  }
+  function renderFinder() {
+    const opts = options(),
+      on = opts.abilityRng || opts.innateRng;
+    $('editor-panel').innerHTML =
+      `<div class="page-heading"><h1>Species finder.</h1><p>Pick up to four abilities and innates and see every species that can have all of them at once, with a PID that does it.</p></div>${on ? `<p class="notice">Your save has the ${opts.abilityRng && opts.innateRng ? 'ability and innate randomizers' : opts.abilityRng ? 'ability randomizer' : 'innate randomizer'} on, so most species can roll most combinations. One or two abilities take seconds; three or four can take a few minutes, and results appear as they are found.</p>` : '<p class="notice">Ability and innate randomizers are off in this save, so this lists the species that have these abilities naturally.</p>'}
+    <section class="panel"><div class="panel-heading"><h2>WHAT YOU WANT</h2><span>Any order · abilities and innates</span></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span>Ability ${i + 1}</span><input id="finder-target-${i}" list="list-abilities" placeholder="${i ? 'Optional' : 'Required'}" autocomplete="off"></label>`).join('')}</div>
+    <div class="field-grid" style="margin-top:16px"><label class="field"><span>Type</span><select id="finder-type"><option value="">Any type</option>${catalog.types
+      .map((t, i) =>
+        t && !['None', '???', 'Mystery', 'Stellar'].includes(t)
+          ? `<option value="${i}">${html(t)}</option>`
+          : '',
+      )
+      .join(
+        '',
+      )}</select></label>${numberField('Minimum base stat total', 'finderMin', finder.minTotal, 0, 1000)}<span></span></div>
+    <div class="search-control"><button id="finder-start" class="primary" ${save.damaged.length ? 'disabled' : ''}>Find species</button><button id="finder-stop" hidden>Stop</button></div><div class="search-progress" id="finder-progress" aria-live="polite"></div><progress id="finder-meter" max="100" value="0" hidden></progress></section><div id="finder-results"></div>`;
+    finder.targets.forEach((t, i) => ($('finder-target-' + i).value = t));
+    $('finder-type').value = finder.type;
+    const minInput = document.querySelector('[name="finderMin"]');
+    minInput.id = 'finder-min';
+    for (let i = 0; i < 4; i++)
+      $('finder-target-' + i).oninput = e => (finder.targets[i] = e.target.value);
+    $('finder-type').onchange = e => (finder.type = e.target.value);
+    minInput.oninput = e => (finder.minTotal = Math.max(0, Math.min(1000, +e.target.value || 0)));
+    $('finder-start').onclick = startFinder;
+    $('finder-stop').onclick = () => {
+      if (finder.run) finder.run.ended = performance.now();
+      stopFinder();
+      finderStatus();
+      drawFinderResults();
+    };
+    $('finder-results').onclick = e => {
+      const button = e.target.closest('[data-finder-add]');
+      if (!button) return;
+      const r = finder.results.find(x => x.species === +button.dataset.finderAdd);
+      if (r) openAddDialog({ species: r.species, pid: r.pid, abilitySlot: r.slot });
+    };
+    drawFinderResults();
+    finderStatus();
+  }
+  // ---- Move details ----------------------------------------------------------------------------
+  const openMoveDetails = new Set();
+  const MOVE_CATEGORIES = [
+    'Physical',
+    'Special',
+    'Status',
+    'Uses the higher attacking stat',
+    'Hits Defense',
+    'Uses the stronger of Physical or Special',
+    'Hits Special Defense',
+  ];
+  function moveDetails(move) {
+    if (!move || !move.id) return '<p class="field-help">No move in this slot.</p>';
+    const rows = [
+      ['Type', typeTags(move.types)],
+      ['Category', html(MOVE_CATEGORIES[move.split] || 'Unknown')],
+      ['Power', move.power ? html(move.power) : 'None'],
+      [
+        'Accuracy',
+        move.accuracy === undefined
+          ? ''
+          : move.accuracy
+            ? `${html(move.accuracy)}%`
+            : 'Never misses',
+      ],
+      ['PP', `${html(move.pp)} (up to ${html(ERCore.maxPP(move))} with PP Ups)`],
+      [
+        'Priority',
+        move.priority === undefined
+          ? ''
+          : move.priority > 0
+            ? `+${html(move.priority)}`
+            : html(move.priority),
+      ],
+      ['Target', html(move.target || '')],
+      ['Effect', move.effect && move.effect !== 'Hit' ? html(move.effect) : ''],
+      [
+        'Effect chance',
+        move.chance && move.chance < 100
+          ? `${html(move.chance)}%`
+          : move.chance === 100 && move.effect && move.effect !== 'Hit'
+            ? 'Always'
+            : '',
+      ],
+    ].filter(([, value]) => value !== '');
+    const flags = move.flags?.length
+      ? `<p class="move-flags">${move.flags.map(f => `<span>${html(f)}</span>`).join('')}</p>`
+      : '';
+    const text = [move.longDescription, move.description].filter(Boolean);
+    return `<dl class="move-facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${flags}${text.map(t => `<p class="move-text">${html(t)}</p>`).join('')}${move.accuracy === undefined ? '<p class="field-help">Accuracy, priority and target are not in this game data profile.</p>' : ''}`;
+  }
+  function heldItemText(id) {
+    const item = catalog.items[id];
+    if (!id || !item) return 'Not holding an item.';
+    return `<b>${html(item.name)}</b>${item.desc ? `: ${html(item.desc)}` : ''}`;
   }
   function renderPokemon(m) {
     const s = catalog.species[m.species],
@@ -672,13 +943,13 @@
     )}
     ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}${selectField('Shininess', 'shiny', m.shiny, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}
     ${selectField('Hidden Power type', 'hpType', m.hpType, [...catalog.types, 'None'])}${numberField('Met level', 'metLevel', m.metLevel, 0, 100)}
-    </div><div class="checkrow"><label><input name="egg" type="checkbox" ${m.egg ? 'checked' : ''}> Egg</label><label><input name="speedDown" type="checkbox" ${m.speedDown ? 'checked' : ''}> Zero Speed IV</label></div><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
+    </div><div class="checkrow"><label><input name="egg" type="checkbox" ${m.egg ? 'checked' : ''}> Egg</label><label><input name="speedDown" type="checkbox" ${m.speedDown ? 'checked' : ''}> Zero Speed IV</label></div><p class="field-help" id="held-item-desc">${heldItemText(m.heldItem)}</p><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
     ${originPanel(m)}${ref.kind === 'party' ? conditionPanel(m) : ''}
     <div class="two-columns"><section class="panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label, i) => `<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100, s.base[i] / 2.55)}%"></i></div></td><td>${(options().difficulty === 3 && save.flag(2893)) || (i === 5 && m.speedDown) ? 0 : 31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a, b) => a + b, 0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs ? 'enabled' : 'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind === 'party' ? `HP ${m.hp}/${m.stats[0]}.` : 'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
     <section class="panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind === 'party' ? 'MOVE / CURRENT PP' : 'MOVE'}</span></div><div class="moves-list">${m.moves
       .map((id, i) => {
         const move = catalog.moves[id];
-        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span></div></div>`;
+        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span><button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
       })
       .join(
         '',
@@ -713,9 +984,13 @@
         try {
           const id = resolve('moves', form.elements[`move${i + 1}`].value),
             move = catalog.moves[id];
-          $('move-meta-' + i).innerHTML =
+          const meta = $('move-meta-' + i),
+            toggle = meta.querySelector('[data-move-toggle]');
+          meta.innerHTML =
             typeTags(move.types) +
             `<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span>`;
+          meta.append(toggle);
+          $('move-details-' + i).innerHTML = moveDetails(move);
           if (ref.kind === 'party') {
             form.elements[`pp${i}`].max = ERCore.maxPP(move);
             form.elements[`pp${i}`].value = ERCore.maxPP(move);
@@ -724,6 +999,27 @@
           fail(e);
         }
       });
+    form.elements.heldItem.addEventListener('change', () => {
+      try {
+        $('held-item-desc').innerHTML = heldItemText(
+          resolve('items', form.elements.heldItem.value, true),
+        );
+      } catch {
+        $('held-item-desc').textContent = '';
+      }
+    });
+    form.querySelectorAll('[data-move-toggle]').forEach(button =>
+      button.addEventListener('click', () => {
+        const i = +button.dataset.moveToggle,
+          panel = $('move-details-' + i),
+          open = panel.hidden;
+        panel.hidden = !open;
+        button.textContent = open ? 'Hide details' : 'Details';
+        button.setAttribute('aria-expanded', String(open));
+        if (open) openMoveDetails.add(i);
+        else openMoveDetails.delete(i);
+      }),
+    );
     $('max-pp')?.addEventListener('click', () => {
       try {
         for (let i = 0; i < 4; i++)
@@ -1071,17 +1367,17 @@
       .map(mv => mv.id);
     return picked.length ? picked : [1];
   }
-  function openAddDialog() {
+  function openAddDialog(found = null) {
     if (!guard()) return;
     const cap = save.cap(),
-      start = catalog.species[150] ? 150 : +Object.keys(catalog.species)[0];
+      start = found ? found.species : catalog.species[150] ? 150 : +Object.keys(catalog.species)[0];
     const dialog = openDialog(
       'Add a Pokémon',
       'Creates a new Pokémon with you as its original trainer.',
       `<div class="tab-switch" role="tablist"><button type="button" role="tab" class="active" data-mode="new">Build</button><button type="button" role="tab" data-mode="import">Paste Showdown set</button></div>
     <form data-pane="new" class="add-form"><div class="field-grid two-up"><label class="field"><span>Species</span><input name="species" list="list-species" value="${html(display(catalog.species[start]))}" autocomplete="off" required></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}
     <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}</div>
-    <p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label>`).join('')}</div></form>
+    ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label>`).join('')}</div></form>
     <div data-pane="import" hidden><textarea class="set-text" rows="9" placeholder="Garchomp @ Life Orb&#10;Ability: Sand Force&#10;Level: 100&#10;EVs: 252 Atk / 4 SpD / 252 Spe&#10;Jolly Nature&#10;- Earthquake&#10;- Dragon Claw" aria-label="Showdown set"></textarea><p class="field-help" data-import-help>Species, item, level, EVs, nature, shininess, happiness and moves are imported. Abilities come from the PID: if the requested ability is not one of the new Pokémon’s choices, the Ability lab opens with it filled in.</p></div>
     <p class="section-label">Where should it go?</p>${destinationFields()}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
@@ -1103,6 +1399,31 @@
     };
     fillMoves();
     form.elements.species.addEventListener('change', fillMoves);
+    const usesFound = () => {
+      try {
+        return !!found && resolve('species', form.elements.species.value) === found.species;
+      } catch {
+        return false;
+      }
+    };
+    const foundNote = () => {
+      const note = dialog.querySelector('[data-found-note]');
+      if (!note) return;
+      if (!usesFound()) {
+        note.textContent = 'Species changed, so this Pokémon gets a random PID instead.';
+        return;
+      }
+      const r = ERRng.evaluate(
+        catalog.species[found.species],
+        found.pid,
+        found.abilitySlot,
+        options(),
+        catalog.config,
+      );
+      note.textContent = `Uses PID ${found.pid.toString(16).toUpperCase().padStart(8, '0')} from the species finder: ${catalog.abilities[r.ability]?.name} with ${r.innates.map(id => catalog.abilities[id]?.name).join(', ')}.`;
+    };
+    foundNote();
+    form.elements.species.addEventListener('input', foundNote);
     for (let i = 0; i < 4; i++)
       form.elements[`move${i}`].addEventListener('input', () => (movesEdited = true));
     dialog.querySelectorAll('[data-mode]').forEach(
@@ -1134,6 +1455,8 @@
             moves,
             shiny: +form.elements.shiny.value,
           };
+          if (usesFound())
+            Object.assign(options, { pid: found.pid, abilitySlot: found.abilitySlot });
           if (natureValue !== 'random') options.nature = +natureValue;
           closeDialog(dialog);
           applyStructural(
@@ -1203,7 +1526,7 @@
     const off = !!save.damaged.length;
     $('roster-actions').innerHTML =
       `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
-    $('add-mon').onclick = openAddDialog;
+    $('add-mon').onclick = () => openAddDialog();
     $('heal-party')?.addEventListener('click', () => {
       if (guard()) apply(() => save.healParty(), 'Party healed: full HP, PP and no status.');
     });
@@ -1214,7 +1537,10 @@
   // ---- Trainer & bag tab --------------------------------------------------------------------
   let bagDraft = new Map(),
     bagFilter = { text: '', owned: 'all', group: 'all' };
+  // Bag pockets come from the game's item data; imported profiles without it fall back
+  // to guessing from the name.
   function itemGroup(item) {
+    if (item.pocket) return item.pocket;
     const n = item.name;
     if (/^(TM|HM)\d/.test(n)) return 'tm';
     if (/ Ball$/.test(n)) return 'ball';
@@ -1222,7 +1548,18 @@
     if (/ite( [XYZ])?$/.test(n) && !/^(Meteorite|Odd Keystone)$/.test(n)) return 'mega';
     return 'other';
   }
-  const ITEM_GROUPS = {
+  const ITEM_POCKETS = {
+    all: 'All pockets',
+    items: 'Items',
+    medicine: 'Medicine',
+    ball: 'Poké Balls',
+    battle: 'Battle items',
+    berry: 'Berries',
+    tm: 'TMs & HMs',
+    mega: 'Mega Stones',
+    key: 'Key items',
+  };
+  const ITEM_GROUPS_GUESSED = {
     all: 'All items',
     ball: 'Poké Balls',
     berry: 'Berries',
@@ -1230,12 +1567,15 @@
     mega: 'Mega Stones & Z',
     other: 'Everything else',
   };
+  const itemGroups = () =>
+    Object.values(catalog.items).some(i => i.pocket) ? ITEM_POCKETS : ITEM_GROUPS_GUESSED;
   function bagItems() {
     return Object.values(catalog.items)
       .filter(i => i.id > 0 && i.id < 2048 && i.name && !/^\?+$/.test(i.name) && i.name !== 'None')
       .sort((a, b) => a.name.localeCompare(b.name));
   }
   function renderTrainer() {
+    if (!(bagFilter.group in itemGroups())) bagFilter.group = 'all';
     const t = save.trainerCard(),
       money = save.money(),
       bp = save.battlePoints(),
@@ -1249,7 +1589,7 @@
     ${numberField('Play time · hours', 'hours', t.hours, 0, 999)}${numberField('Minutes', 'minutes', t.minutes, 0, 59)}${numberField('Seconds', 'seconds', t.seconds, 0, 59)}
     </div><div class="checkrow"><label><input name="updateOwned" type="checkbox" checked> Also update the OT on Pokémon I caught, so they stay mine and keep obeying</label></div>
     <div class="form-footer"><p>If you change your name or IDs without updating your Pokémon, high-level ones may stop obeying you.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply trainer card</button></div></div></section></fieldset></form>
-    ${money.supported ? `<form id="money-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>MONEY & POINTS</h2><span>Max ¥999,999 · 9,999 coins · 9,999 BP</span></div><div class="field-grid">${numberField('Money (¥)', 'money', money.money, 0, 999999)}${numberField('Game Corner coins', 'coins', money.coins, 0, 9999)}${bp.supported ? numberField('Battle Points (BP)', 'battlePoints', bp.battlePoints, 0, 9999) + numberField('Trainer card BP (total earned)', 'cardBattlePoints', bp.cardBattlePoints, 0, 9999) : ''}</div><div class="form-footer"><p>Elite Redux stores money, coins and Battle Points as plain values.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply money & points</button></div></div></section></fieldset></form>` : '<p class="notice warning">Money could not be read safely from this save, so money editing is turned off.</p>'}
+    ${money.supported ? `<form id="money-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>MONEY & POINTS</h2><span>Max ¥999,999 · 9,999 coins · 9,999 BP</span></div><div class="field-grid">${numberField('Money (¥)', 'money', money.money, 0, 999999)}${numberField('Game Corner coins', 'coins', money.coins, 0, 9999)}${bp.supported ? numberField('Battle Points (BP)', 'battlePoints', bp.battlePoints, 0, 9999) + numberField('Trainer card BP (total earned)', 'cardBattlePoints', bp.cardBattlePoints, 0, 9999) : ''}</div><div class="form-footer"><p>Adding Battle Points also adds them to the trainer card total, unless you change that total yourself.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply money & points</button></div></div></section></fieldset></form>` : '<p class="notice warning">Money could not be read safely from this save, so money editing is turned off.</p>'}
     <form id="boxes-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>PC BOXES</h2><span>Names up to 8 characters</span></div><div class="field-grid" style="margin-bottom:16px">${selectField(
       'Box shown when the PC opens',
       'currentBox',
@@ -1257,8 +1597,8 @@
       Array.from({ length: 26 }, (_, b) => save.boxName(b)),
     )}</div><div class="box-name-grid">${Array.from({ length: 26 }, (_, b) => `<div class="box-name-cell"><label class="field"><span>Box ${b + 1} · ${save.box(b).filter(m => m.species).length}/30</span><input name="box${b}" value="${html(save.boxName(b))}" maxlength="8"></label><label class="field"><span>Wallpaper</span><select name="wall${b}">${storage.wallpapers[b] >= WALLPAPER_NAMES.length ? `<option value="${storage.wallpapers[b]}" selected>Special (${storage.wallpapers[b]})</option>` : ''}${WALLPAPER_NAMES.map((w, i) => `<option value="${i}"${i === storage.wallpapers[b] ? ' selected' : ''}>${w}</option>`).join('')}</select></label></div>`).join('')}</div><div class="form-footer"><p>Names use the game's character set.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply PC boxes</button></div></div></section></fieldset></form>
     <section class="panel" id="bag-panel"><div class="panel-heading"><h2>BAG</h2><span id="bag-count"></span></div><p class="notice">Elite Redux bags hold each item once with unlimited uses, so an item is simply owned or not. Key items and HMs can unlock story areas early; add them with care.</p>
-    <div class="bag-tools"><label class="field"><span>Search items</span><input id="bag-search" type="search" value="${html(bagFilter.text)}" placeholder="Name or ID" autocomplete="off"></label><label class="field"><span>Category</span><select id="bag-group">${Object.entries(
-      ITEM_GROUPS,
+    <div class="bag-tools"><label class="field"><span>Search items</span><input id="bag-search" type="search" value="${html(bagFilter.text)}" placeholder="Name or ID" autocomplete="off"></label><label class="field"><span>Pocket</span><select id="bag-group">${Object.entries(
+      itemGroups(),
     )
       .map(
         ([k, l]) => `<option value="${k}"${k === bagFilter.group ? ' selected' : ''}>${l}</option>`,
@@ -1304,9 +1644,13 @@
             points = mf.elements.battlePoints
               ? wholeNumber(mf.elements.battlePoints.value, 'Battle Points', 0, 9999)
               : null;
-          const card = mf.elements.cardBattlePoints
+          let card = mf.elements.cardBattlePoints
             ? wholeNumber(mf.elements.cardBattlePoints.value, 'Trainer card BP', 0, 9999)
             : null;
+          // BP added here counts as earned on the trainer card too, unless that was edited.
+          const before = save.battlePoints();
+          if (points !== null && card === before.cardBattlePoints && points > before.battlePoints)
+            card = Math.min(9999, card + points - before.battlePoints);
           apply(() => {
             save.editMoney(patch);
             if (points !== null && points !== save.battlePoints().battlePoints)
@@ -1361,7 +1705,7 @@
         ? list
             .map(
               i =>
-                `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
+                `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"${i.desc ? ` title="${html(i.desc)}"` : ''}><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
             )
             .join('')
         : '<p class="field-help">No items match.</p>';
@@ -1636,7 +1980,7 @@
     matchMode = draft.matchMode;
     $('editor-panel').innerHTML =
       `${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${html(catalog.config.modulus)}-outcome randomizer.</p>${!on ? '<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>' : ''}
-    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
+    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="actions-inline" style="margin-bottom:12px"><button type="button" id="fill-current" ${on ? '' : 'disabled'}>Fill blanks with current abilities</button></div><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
     <div id="search-results"></div><section class="panel"><div class="panel-heading"><h2>PID & FORM PREVIEW</h2><span>Changing PID can change gender and randomized types</span></div><div class="field-grid"><label class="field"><span>PID · hexadecimal</span><input id="pid-input" value="${m.pid.toString(16).toUpperCase().padStart(8, '0')}" maxlength="8" pattern="[0-9A-Fa-f]{1,8}"></label><label class="field"><span>Preview species / Mega form</span><input id="preview-species" list="list-species" value="${html(display(s))}" autocomplete="off"></label><label class="field"><span>Preview ability slot</span><select id="preview-slot">${[0, 1, 2].map(i => `<option value="${i}" ${i === m.abilitySlot ? 'selected' : ''}>Slot ${i + 1}</option>`).join('')}</select></label></div><div class="form-footer"><p>Preview does not change species or PID until you apply a PID.</p><div class="actions-inline"><button id="preview-button">Preview</button><button id="reroll-button" ${save.damaged.length ? 'disabled' : ''}>Reroll PID</button><button id="apply-pid" class="primary" ${save.damaged.length ? 'disabled' : ''}>Apply PID</button></div></div><div id="pid-preview" style="margin-top:16px"></div></section>`;
     const updateMatchLabels = () => {
       for (let i = 0; i < 4; i++)
@@ -1669,6 +2013,29 @@
     for (let i = 0; i < 4; i++) $('target-' + i).oninput = changed;
     $('lock-slot').onchange = changed;
     $('keep-gender').onchange = changed;
+    $('fill-current').onclick = () => {
+      // Copies what this Pokémon has now into empty inputs. Every ability and innate
+      // rolls from the same PID, so each one kept makes matches far rarer: clear the
+      // ones you are willing to lose.
+      const now = ERRng.evaluate(s, m.pid, m.abilitySlot, options(), catalog.config);
+      const current = [now.ability, ...now.innates];
+      if (matchMode === 'slots')
+        current.forEach((id, i) => {
+          if (!$('target-' + i).value.trim())
+            $('target-' + i).value = display(catalog.abilities[id]);
+        });
+      else {
+        const typed = [0, 1, 2, 3].map(i => $('target-' + i).value.trim()).filter(Boolean);
+        const extra = current.filter(id => !typed.includes(display(catalog.abilities[id])));
+        for (let i = 0; i < 4 && extra.length; i++)
+          if (!$('target-' + i).value.trim())
+            $('target-' + i).value = display(catalog.abilities[extra.shift()]);
+      }
+      changed();
+      notify(
+        'Filled in. Each ability you keep makes matching PIDs rarer, since all of them come from the same PID. Clear the ones you can live without.',
+      );
+    };
     drawResults();
     $('search-button').onclick = () => startSearch(m);
     $('cancel-search').onclick = () => {
@@ -2159,8 +2526,9 @@
     const count = save.changedBytes(),
       checks = save.report();
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? 'Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
+      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>File name</span><input id="export-name" value="${html(exportName())}" maxlength="120" autocomplete="off" spellcheck="false"></label><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? 'Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
     $('review-backup').onclick = backup;
+    $('export-name').oninput = e => (exportBase = e.target.value);
     $('review-export').onclick = () => exportSave($('extension').value);
     $('reset-all').onclick = () => {
       save.reset();
@@ -2193,12 +2561,22 @@
     );
     notify('Original backup downloaded.');
   }
+  // Export name without extension. Characters that file systems reject are replaced.
+  let exportBase = null;
+  function exportName() {
+    const fallback = filename.replace(/\.(sav|srm)$/i, '') + '.edited';
+    const name = (exportBase ?? fallback)
+      .replace(/\.(sav|srm)$/i, '')
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+      .trim();
+    return name || fallback;
+  }
   function exportSave(ext) {
     if (!guard()) return;
     try {
       const bytes = save.export();
       const suffix = ext || (filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav');
-      download(bytes, filename.replace(/\.(sav|srm)$/i, '') + '.edited.' + suffix);
+      download(bytes, `${exportName()}.${suffix}`);
       notify('Export verified: 20 valid sections, 128 KB.');
       sync();
     } catch (e) {
@@ -2222,12 +2600,28 @@
     }
     try {
       const next = new ERCore.Save(await file.arrayBuffer(), catalog);
+      // Switch to the build this save most likely comes from (bundled data only).
+      let switched = null;
+      if (bundledVersionOf(catalog)) {
+        const guess = ERCore.detectVersion(next, bundled, file.name, { '2.65.4.1b': '2.65.4' });
+        if (guess && bundled[guess.version] !== catalog) {
+          switched = guess;
+          catalog = next.catalog = bundled[guess.version];
+          buildLists();
+          rememberVersion(guess.version);
+        }
+      }
+      drawVersionPickers();
       cancelSearch();
+      stopFinder();
+      finder.results = [];
+      finder.run = null;
       save = next;
       searchDrafts.clear();
       bagDraft.clear();
       dexDraft.clear();
       filename = file.name;
+      exportBase = null;
       roster = 'party';
       ref = { kind: 'party', slot: 0 };
       tab = 'pokemon';
@@ -2249,7 +2643,15 @@
       notify(
         save.damaged.length
           ? 'This save has checksum errors; editing is disabled.'
-          : 'Save loaded and checked.',
+          : switched
+            ? `Save loaded and checked. Switched to Elite Redux ${switched.version} data: ${
+                switched.reason === 'moves'
+                  ? 'your Pokémon know moves that only exist in that build'
+                  : switched.reason === 'filename'
+                    ? 'the file name says so'
+                    : 'your party’s stats match that build'
+              }. Change it next to the file name if that’s wrong.`
+            : 'Save loaded and checked.',
         !!save.damaged.length,
       );
     } catch (e) {
@@ -2319,6 +2721,7 @@
       (e.onclick = () => {
         if (!guard()) return;
         resetSearch();
+        if (e.dataset.tab !== 'finder') stopFinder();
         tab = e.dataset.tab;
         render();
       }),
