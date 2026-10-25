@@ -2542,3 +2542,8 @@ details.panel[open] > summary {
 .form-footer p.warning-text {
   color: #e6b25c;
 }
+.dex-item .dex-form-of {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}

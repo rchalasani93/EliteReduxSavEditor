@@ -2513,14 +2513,28 @@
             : dex.seen(n)
               ? 'seen'
               : 'none';
+    // Forms (Primal Cascoon, Rattata Redux…) have no entry of their own; searching shows them
+    // next to their base, and each one sets that shared entry.
+    const listed = new Set(entries.map(sp => sp.id)),
+      baseOf = new Map(entries.map(sp => [sp.no, sp.name])),
+      forms = Object.values(catalog.species)
+        .filter(sp => sp.id > 0 && !listed.has(sp.id))
+        .map(sp => ({ ...sp, no: ERCore.dexNumber(catalog, sp.id), form: true }))
+        .filter(sp => baseOf.has(sp.no));
     const shown = () => {
       const q = dexFilter.text.trim().toLocaleLowerCase();
-      return entries.filter(
+      return (
+        q ? [...entries, ...forms].sort((a, b) => a.no - b.no || !!a.form - !!b.form) : entries
+      ).filter(
         sp =>
-          (!q || matchesQuery(`${sp.name} ${sp.no}`.toLocaleLowerCase(), q)) &&
+          (!q ||
+            matchesQuery(`${sp.name} ${sp.no}`.toLocaleLowerCase(), q) ||
+            (sp.form && matchesQuery(`${baseOf.get(sp.no)} ${sp.no}`.toLocaleLowerCase(), q))) &&
           (dexFilter.show === 'all' || stateOf(sp.no) === dexFilter.show),
       );
     };
+    // Unique entries among the shown rows, for bulk actions.
+    const shownEntries = () => [...new Map(shown().map(sp => [sp.no, sp])).values()];
     const pending = () => {
       dirty = dexDraft.size > 0;
       $('dex-panel').classList.toggle('is-dirty', dirty);
@@ -2562,7 +2576,7 @@
             .slice(0, 600)
             .map(sp => {
               const st = stateOf(sp.no);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
             })
             .join('') +
           (list.length > 600
@@ -2574,8 +2588,15 @@
     $('dex-list').onchange = e => {
       const el = e.target.closest('[data-dex]');
       if (!el) return;
-      setState(+el.dataset.dex, el.value);
-      el.parentElement.classList.toggle('changed', dexDraft.has(+el.dataset.dex));
+      const no = +el.dataset.dex;
+      setState(no, el.value);
+      // A form and its base share one entry: keep every row for it in step.
+      $('dex-list')
+        .querySelectorAll(`[data-dex="${no}"]`)
+        .forEach(other => {
+          other.value = el.value;
+          other.parentElement.classList.toggle('changed', dexDraft.has(no));
+        });
       pending();
     };
     $('dex-search').oninput = e => {
@@ -2596,7 +2617,7 @@
           // Never go past the 999 seen the game can draw: mark in Pokédex order until full.
           let seen = entries.filter(sp => stateOf(sp.no) !== 'none').length,
             skipped = 0;
-          for (const sp of shown()) {
+          for (const sp of shownEntries()) {
             if (st !== 'none' && stateOf(sp.no) === 'none') {
               if (seen >= limit) {
                 skipped++;
