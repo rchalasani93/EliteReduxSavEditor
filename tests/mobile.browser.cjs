@@ -186,6 +186,16 @@ async function runEngine(engine) {
     assert.notEqual(await page.evaluate(() => document.activeElement.id), 'ability-picker-filter');
     await page.setViewportSize({ width: 390, height: 320 });
     await page.locator('#ability-picker-filter').fill('stench');
+    // WebKit can deliver the resize a frame after the viewport changes; wait for layout to settle.
+    await page
+      .waitForFunction(
+        () =>
+          document.getElementById('ability-picker').getBoundingClientRect().bottom <=
+          (window.visualViewport?.height || innerHeight) + 1,
+        null,
+        { timeout: 5000 },
+      )
+      .catch(() => {});
     await checkDialog(page, '#ability-picker');
     await page.locator('#ability-picker-options .picker-option').first().tap();
     await page.locator('#ability-picker').waitFor({ state: 'detached' });

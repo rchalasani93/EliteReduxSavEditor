@@ -575,7 +575,7 @@
       $('health-banner').classList.add('warn');
       $('health-banner').insertAdjacentHTML(
         'beforeend',
-        `<span class="dex-orphans">Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''} ${orphans.length === 1 ? 'is' : 'are'} marked but no Pokémon has ${orphans.length === 1 ? 'it' : 'them'}. The game's Pokédex crashes on ${orphans.length === 1 ? 'it' : 'them'}. <button type="button" id="fix-dex">Clear ${orphans.length === 1 ? 'it' : 'them'}</button></span>`,
+        `<span class="dex-orphans">Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''} ${orphans.length === 1 ? 'is' : 'are'} marked but no Pokémon has ${orphans.length === 1 ? 'it' : 'them'}. The game shows ${orphans.length === 1 ? 'it' : 'them'} as a blank entry and counts ${orphans.length === 1 ? 'it' : 'them'} toward the 999 limit. <button type="button" id="fix-dex">Clear ${orphans.length === 1 ? 'it' : 'them'}</button></span>`,
       );
       $('fix-dex').onclick = () => {
         if (!guard()) return;
@@ -583,6 +583,24 @@
           () => save.clearPokedexOrphans(),
           `Cleared ${orphans.length} Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} the game can't show.`,
         );
+      };
+    }
+    const seenTotal = save.damaged.length ? 0 : save.pokedex().counts().seen,
+      limit = save.pokedex().limit;
+    if (seenTotal > limit) {
+      $('health-banner').classList.add('warn');
+      $('health-banner').insertAdjacentHTML(
+        'beforeend',
+        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark the highest ${seenTotal - limit} to keep ${limit}</button></span>`,
+      );
+      $('trim-dex').onclick = () => {
+        if (!guard()) return;
+        let removed = [];
+        apply(() => (removed = save.trimPokedex()), `Pokédex trimmed to ${limit} seen.`);
+        if (removed.length)
+          notify(
+            `Pokédex trimmed to ${limit} seen: unmarked #${removed[0]} to #${removed[removed.length - 1]}.`,
+          );
       };
     }
   }
@@ -1658,6 +1676,11 @@
           return { kind: 'box', box: +form.elements.box.value, slot: 0 };
         }, `${list.length} Pokémon added to your PC. Undo removes them all.`);
         if (added && added < list.length) notify(`${added} added; the PC is full.`, true);
+        else if (save.lastPokedexSkipped?.length)
+          notify(
+            `${added} added. ${save.lastPokedexSkipped.length} of them weren't recorded in the Pokédex: it already has ${save.pokedex().limit} seen, the most the game can show.`,
+            true,
+          );
       } catch (e) {
         fail(e);
       }
@@ -2426,7 +2449,7 @@
     const roamerSpecies = catalog.species[roamer.species];
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
-    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per Pokédex number. Forms (Megas, Primals, regional forms) share their base Pokémon's entry, so Primal Cascoon counts as Cascoon. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
+    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per Pokédex number. Forms (Megas, Primals, regional forms) share their base Pokémon's entry, so Primal Cascoon counts as Cascoon. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon. Keep it to 999 seen at most: the game's Pokédex crashes at 1,000, because it can only draw three-digit totals.</p>
     <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label></div><div class="pocket-chips" id="dex-show" role="group" aria-label="Show species"></div>
     <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
@@ -2478,9 +2501,14 @@
             `<button type="button" data-dex-show="${key}" aria-pressed="${key === dexFilter.show}">${label} <small>${counts[key]}</small></button>`,
         )
         .join('');
-      $('dex-pending').textContent = dexDraft.size
-        ? `${dexDraft.size} pending Pokédex change${dexDraft.size === 1 ? '' : 's'} · apply to save them`
-        : 'No pending Pokédex changes.';
+      const tooMany = s > save.pokedex().limit && dexDraft.size;
+      $('dex-pending').textContent = tooMany
+        ? `${s.toLocaleString()} would be seen. The game's Pokédex crashes at 1,000 or more, so clear ${s - save.pokedex().limit} before applying.`
+        : dexDraft.size
+          ? `${dexDraft.size} pending Pokédex change${dexDraft.size === 1 ? '' : 's'} · apply to save them`
+          : 'No pending Pokédex changes.';
+      $('dex-pending').classList.toggle('warning-text', !!tooMany);
+      $('dex-apply').disabled = !!tooMany || !!off;
     };
     const original = n => (dex.caught(n) ? 'caught' : dex.seen(n) ? 'seen' : 'none');
     const setState = (n, st) => {

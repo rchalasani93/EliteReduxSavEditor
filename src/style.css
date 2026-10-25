@@ -2533,3 +2533,6 @@ details.panel[open] > summary {
   margin-left: 6px;
   padding: 5px 10px;
 }
+.warning-text {
+  color: #e6b25c;
+}

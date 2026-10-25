@@ -473,3 +473,27 @@ test('Pokédex numbers no Pokémon has are found and cleared', () => {
   assert.deepEqual(t.pokedex().orphans(), []);
   assert.ok(!t.pokedex().seen(1128));
 });
+
+test('Pokédex stays within the 999 seen the game can draw', () => {
+  const s = new core.Save(fixture(), catalog),
+    list = core.pokedexList(catalog);
+  const all = Object.fromEntries(list.map(e => [e.no, 'caught']));
+  assert.throws(() => s.editPokedex(all), /1,000/);
+  const first = Object.fromEntries(list.slice(0, 999).map(e => [e.no, 'caught']));
+  s.editPokedex(first);
+  assert.equal(s.pokedex().counts().seen, 999);
+  // Bulk adds still place the Pokémon but leave the Pokédex at 999.
+  const extra = list.slice(999, 1001).map(e => ({ species: e.species.id, level: 5, moves: [1] }));
+  assert.equal(s.createMany(extra), 2);
+  assert.equal(s.lastPokedexSkipped.length, 2);
+  assert.equal(s.pokedex().counts().seen, 999);
+
+  // A save already over the limit (edited elsewhere) can be trimmed back.
+  const t = new core.Save(fixture(), { ...catalog });
+  t.editPokedex(first);
+  const raw = t.export();
+  const u = new core.Save(raw, catalog);
+  u.editPokedex({ [list[0].no]: 'none' }); // reductions are always allowed
+  assert.equal(u.pokedex().counts().seen, 998);
+  assert.deepEqual(u.trimPokedex(), []);
+});

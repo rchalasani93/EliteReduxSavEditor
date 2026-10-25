@@ -63,7 +63,10 @@
     ROAMER = SB1 + 0x2e40,
     DEX_SEEN = SB1 + 0x2e54,
     DEX_CAUGHT = SB1 + 0x2f10,
-    DEX_BYTES = 188;
+    DEX_BYTES = 188,
+    // The game's Pokédex draws its seen and caught totals as three digit sprites with
+    // frames for 0-9 only; at 1,000 the hundreds digit reads past that table and crashes.
+    DEX_LIMIT = 999;
   const CLOCK_OFFSET = 0x24,
     CARD_BATTLE_POINTS = 0xc16,
     NUZLOCKE_CAPTURES = 0xc9c,
@@ -444,6 +447,11 @@
   // The Pokédex is indexed by national number, which in Elite Redux differs from the
   // species ID for later species and is shared by forms. Profiles without numbers (old
   // imports) fall back to the base species ID, which matches up to Gen 9.
+  const popcount = b => {
+    let n = 0;
+    for (; b; b &= b - 1) n++;
+    return n;
+  };
   function dexNumber(catalog, id) {
     const species = catalog.species[id];
     if (!species) return 0;
@@ -636,7 +644,7 @@
         }
         const items = plan.items || [];
         if (items.length) this.editItems(Object.fromEntries(items.map(id => [id, true])));
-        const dex = {};
+        const dex = [];
         for (const gift of plan.gifts || []) {
           const sp = this.catalog.species[gift.species];
           if (!sp) throw new Error('A gift Pokémon is not in this game data.');
@@ -662,10 +670,9 @@
             moves: gift.moves.filter(id => id && this.catalog.moves[id]),
             shiny: gift.shiny ? 1 : 0,
           });
-          const no = dexNumber(this.catalog, sp.id);
-          if (no) dex[no] = 'caught';
+          dex.push(dexNumber(this.catalog, sp.id));
         }
-        if (Object.keys(dex).length) this.editPokedex(dex);
+        this.catchInPokedex(dex);
         if (plan.champion) {
           const key = this.encryptionKey(),
             stat = id =>
@@ -1044,8 +1051,9 @@
           }
           return { seen: s, caught: c };
         },
-        // Numbers marked seen or caught that no Pokémon has. The game's Pokédex looks up
-        // species 0 for them, which crashes it.
+        // Numbers marked seen or caught that no Pokémon has: the game shows them as blank
+        // entries, and they still count toward the 999-seen limit.
+        limit: DEX_LIMIT,
         orphans: () => {
           const valid = new Set(pokedexList(this.catalog).map(e => e.no)),
             out = [];
@@ -1060,11 +1068,47 @@
       if (orphans.length) this.editPokedex(Object.fromEntries(orphans.map(n => [n, 'none'])));
       return orphans;
     }
+    // Records Pokémon as caught without passing the game's 999-seen limit. Returns the
+    // Pokédex numbers that had to be left out.
+    catchInPokedex(numbers) {
+      const d = this.pokedex();
+      let seenCount = d.counts().seen;
+      const changes = {},
+        skipped = [];
+      for (const no of new Set(numbers)) {
+        if (!no || d.caught(no)) continue;
+        if (!d.seen(no)) {
+          if (seenCount >= DEX_LIMIT) {
+            skipped.push(no);
+            continue;
+          }
+          seenCount++;
+        }
+        changes[no] = 'caught';
+      }
+      if (Object.keys(changes).length) this.editPokedex(changes);
+      return skipped;
+    }
+    // Unmarks the highest-numbered entries until no more than 999 are seen.
+    trimPokedex() {
+      const d = this.pokedex();
+      let over = d.counts().seen - DEX_LIMIT;
+      const removed = [];
+      for (let n = DEX_BYTES * 8; n >= 1 && over > 0; n--)
+        if (d.seen(n)) {
+          removed.push(n);
+          over--;
+        }
+      if (removed.length) this.editPokedex(Object.fromEntries(removed.map(n => [n, 'none'])));
+      return removed.reverse();
+    }
     editPokedex(changes) {
       const valid = new Set(pokedexList(this.catalog).map(e => e.no));
       this.transact('Edit Pokédex', () => {
         const seen = this.read(DEX_SEEN, DEX_BYTES),
-          caught = this.read(DEX_CAUGHT, DEX_BYTES);
+          caught = this.read(DEX_CAUGHT, DEX_BYTES),
+          countSeen = () => seen.reduce((t, b) => t + popcount(b), 0),
+          before = countSeen();
         const set = (a, n, v) => {
           const i = (n - 1) >>> 3,
             m = 1 << ((n - 1) & 7);
@@ -1077,11 +1121,16 @@
             throw new Error('Pokédex state must be none, seen or caught.');
           if (state !== 'none' && !valid.has(n))
             throw new Error(
-              `No Pokémon has Pokédex number ${n}; marking it would crash the game's Pokédex.`,
+              `No Pokémon has Pokédex number ${n}, so the game would show a blank entry.`,
             );
           set(seen, n, state !== 'none');
           set(caught, n, state === 'caught');
         }
+        const after = countSeen();
+        if (after > DEX_LIMIT && after > before)
+          throw new Error(
+            `This would make ${after} Pokémon seen. The game's Pokédex crashes at 1,000 or more, so keep it to ${DEX_LIMIT}.`,
+          );
         this.write(DEX_SEEN, seen);
         this.write(DEX_CAUGHT, caught);
       });
@@ -1433,7 +1482,7 @@
     createMany(list, { startBox = 0 } = {}, label = 'Add Pokémon to the PC') {
       let placed = 0;
       this.transact(label, () => {
-        const dex = {},
+        const dex = [],
           free = [];
         for (let i = 0; i < 26; i++) {
           const box = (startBox + i) % 26;
@@ -1445,11 +1494,10 @@
           const target = free.shift();
           if (!target) break;
           this.placeRecord(target, this.newRecord(options));
-          const no = dexNumber(this.catalog, options.species);
-          if (no) dex[no] = 'caught';
+          dex.push(dexNumber(this.catalog, options.species));
           placed++;
         }
-        if (Object.keys(dex).length) this.editPokedex(dex);
+        this.lastPokedexSkipped = this.catchInPokedex(dex);
       });
       return placed;
     }
