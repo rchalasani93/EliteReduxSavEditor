@@ -707,12 +707,40 @@
       ? `<div class="result-heading"><h2>SPECIES THAT CAN HAVE THEM</h2><span>${finder.results.length.toLocaleString()} found${finder.results.length > 400 ? ' · showing the first 400' : ''}</span></div><div class="finder-list">${list
           .map(r => {
             const sp = catalog.species[r.species];
-            return `<div class="finder-row">${pokemonIcon(sp)}<div class="finder-main"><b>${html(sp.name)}</b><small>#${sp.id} · ${ERRng.gender(sp, r.pid)} · PID ${r.pid.toString(16).toUpperCase().padStart(8, '0')}</small><div class="types">${typeTags(r.types)}</div></div><p class="finder-abilities">Ability ${r.slot + 1}: ${mark(r.ability)}<br>Innates: ${r.innates.map(mark).join(', ')}</p><button type="button" data-finder-add="${r.species}" ${save.damaged.length ? 'disabled' : ''}>Add…</button></div>`;
+            return `<div class="finder-row">${pokemonIcon(sp)}<div class="finder-main"><b>${html(sp.name)}</b><small>#${html(sp.id)} · ${html(ERRng.gender(sp, r.pid))} · PID ${html(r.pid.toString(16).toUpperCase().padStart(8, '0'))}</small><div class="types">${typeTags(r.types)}</div></div><p class="finder-abilities">Ability ${html(r.slot + 1)}: ${mark(r.ability)}<br>Innates: ${r.innates.map(mark).join(', ')}</p><button type="button" data-finder-add="${html(r.species)}" ${save.damaged.length ? 'disabled' : ''}>Add…</button></div>`;
           })
           .join('')}</div>`
       : finder.run && !finder.run.busy && !finder.run.stopped
         ? '<p class="notice">No species can roll all of these together with the current randomizer settings.</p>'
         : '';
+  }
+  // Worker messages are not trusted for display: keep only the species, PID and slot
+  // as checked numbers and recompute the abilities and types here.
+  function trustedFinderResult(r) {
+    const species = Number(r?.species),
+      pid = Number(r?.pid),
+      slot = Number(r?.slot);
+    if (
+      !Number.isInteger(species) ||
+      !catalog.species[species] ||
+      !Number.isInteger(pid) ||
+      pid < 0 ||
+      pid > 0xffffffff ||
+      ![0, 1, 2].includes(slot)
+    )
+      return null;
+    const result = ERRng.evaluate(
+      catalog.species[species],
+      pid,
+      slot,
+      finder.run.options,
+      catalog.config,
+    );
+    const values = [result.ability, ...result.innates];
+    const targets = finder.run.targets;
+    if (targets.some(t => values.filter(v => v === t).length < targets.filter(x => x === t).length))
+      return null;
+    return { species, pid, slot, ...result };
   }
   let finderDrawTimer = 0;
   // Pages arrive once per layout; redraw at most a few times a second.
@@ -742,6 +770,7 @@
       );
       const run = {
         targets,
+        options: opts,
         url,
         workers: [],
         total: groups.length,
@@ -762,7 +791,7 @@
           if (data.kind === 'page') {
             run.done++;
             if (data.value.found.length) {
-              finder.results.push(...data.value.found);
+              finder.results.push(...data.value.found.map(trustedFinderResult).filter(Boolean));
               scheduleFinderDraw();
             }
           } else if (data.kind === 'end') {
