@@ -1847,6 +1847,12 @@
   const flagDraft = new Map(),
     varDraft = new Map();
   let storyFilter = { text: '', kind: 'vars', show: 'all', group: 'all' };
+  // Switches the game sets only for a moment or a mode (Safari Zone, Cycling Road, debug
+  // menu, nuzlocke runs), plus Battle Frontier symbols, unused badge slots and daily resets.
+  // Turned on together they change how the game plays and looks, so bulk "Set all" skips them.
+  const MODE_FLAG =
+    /^FLAG_(SYS_(NO_|PC_FROM_DEBUG|AUTOWIN|MGBA|DISABLE_|LOCKED_MODE|DETECTOR_MODE|WEATHER_CTRL|CYCLING_ROAD|SAFARI_MODE|CRUISE_MODE|INVERSE_BATTLE|CTRL_OBJ_DELETE|RESET_RTC_ENABLE|DEBUG|UPPED_DIFFICULTY|FRONTIER_PASS|(TOWER|DOME|PALACE|ARENA|FACTORY|PIKE|PYRAMID)_(SILVER|GOLD)|OPEN_MOVE_MENU|USE_FLASH|USE_STRENGTH|DEXNAV_SEARCH|MYSTERY_(GIFT|EVENT)_ENABLE)|BADGE(09|1[0-6])_GET|DEBUG_|NUZLOCKE_|LOST_NUZLOCKE|PREVENT_|AUTOMATIC_SEASON|PERMANENT_UNCHANGEABLE_WEATHER|LEVEL_UP_FROM_PARTY_SCREEN|TOTEM_BATTLE|SHINY_CREATION|ALPHA_CREATION|FORCE_|NEVER_SET|DAILY_)/;
+  const isMode = n => MODE_FLAG.test(n);
   // Flag groups by the game's naming, so bulk changes can target one kind of flag.
   const FLAG_GROUPS = {
     all: ['All flags', () => true],
@@ -1854,11 +1860,13 @@
     received: ['Gifts received', n => /^FLAG_RECEIVED_/.test(n)],
     defeated: ['Defeated trainers and Pokémon', n => /^FLAG_DEFEATED_/.test(n)],
     items: ['Items picked up (visible and hidden)', n => /^FLAG_(ITEM|HIDDEN_ITEM)_/.test(n)],
-    system: ['Game features and badges', n => /^FLAG_(SYS|BADGE)/.test(n)],
+    system: ['Game features and badges', n => /^FLAG_(SYS|BADGE)/.test(n) && !isMode(n)],
     hide: ['Characters and objects shown or hidden', n => /^FLAG_(HIDE|SHOW)_/.test(n)],
+    modes: ['Game modes, debug, Battle Frontier and daily switches', isMode],
     other: [
       'Everything else',
       n =>
+        !isMode(n) &&
         !/^FLAG_(VISITED_|LANDMARK_|RECEIVED_|DEFEATED_|ITEM_|HIDDEN_ITEM_|SYS|BADGE|HIDE_|SHOW_)/.test(
           n,
         ),
@@ -2023,6 +2031,19 @@
         '',
       )}</div><div class="actions-inline" style="margin-top:14px"><button type="button" id="all-badges" ${badges === 8 || off ? 'disabled' : ''}>Give all 8 badges</button></div></section>
     <section class="panel"><div class="panel-heading"><h2>ELITE FOUR & CHAMPION</h2><span>${cleared ? 'Champion · game cleared' : 'Not cleared yet'}</span></div><p class="field-help" style="margin-top:0">${cleared ? 'This save has entered the Hall of Fame, so the post-game is open.' : 'Becoming Champion sets what the game sets after the Hall of Fame: the game-clear flag the post-game checks for, Champion status, the post-game story (the S.S. Tidal, Steven’s house, Cynthia and more), the Hall of Fame count on your trainer card and a fully healed party. The Elite Four reset for rematches, as in the game.'}</p><div class="actions-inline"><button type="button" class="primary" id="become-champion" ${cleared || off ? 'disabled' : ''}>${cleared ? 'Already Champion' : 'Become Champion…'}</button></div></section>
+    ${(() => {
+      const on = Object.entries(story.flags).filter(
+        ([n, id]) => isMode(n) && !/^FLAG_DAILY_/.test(n) && save.flag(id),
+      );
+      return on.length
+        ? `<div class="notice warning story-mode-warning"><b>${on.length} game-mode or debug switch${on.length === 1 ? ' is' : 'es are'} on in this save:</b> ${on
+            .slice(0, 12)
+            .map(([n]) => html(prettyName(n)))
+            .join(
+              ', ',
+            )}${on.length > 12 ? ` and ${on.length - 12} more` : ''}. The game sets some of these in normal play (Safari Zone, Cycling Road, a nuzlocke run), but if you didn't, turning them off restores normal play. <button type="button" id="review-modes">Review them</button></div>`
+        : '';
+    })()}
     <details class="panel" id="story-panel" ${storyOpen ? 'open' : ''}><summary class="panel-heading"><h2>STORY FLAGS & VARIABLES</h2><span>Advanced · every named event flag and story variable</span></summary><p class="notice warning">These are the game's raw story switches. Changing one without the others an event normally changes can leave characters missing or stuck, so change only what you understand, keep a backup, and prefer the buttons above.</p>
     <div class="bag-tools"><label class="field"><span>Search</span><input id="story-search" type="search" value="${html(storyFilter.text)}" placeholder="For example Rustboro, Steven or Badge" autocomplete="off"></label><label class="field"><span>Show</span><select id="story-kind"><option value="vars">Story variables</option><option value="flags">Event flags</option></select></label><label class="field"><span>Filter</span><select id="story-show"><option value="all">All</option><option value="set">Set or non-zero</option><option value="changed">Changed here</option></select></label></div>
     <div class="story-flag-tools" id="story-flag-tools"><label class="field"><span>Flag group</span><select id="story-group">${Object.entries(
@@ -2064,6 +2085,12 @@
       );
     };
     $('become-champion').onclick = becomeChampion;
+    $('review-modes')?.addEventListener('click', () => {
+      Object.assign(storyFilter, { kind: 'flags', group: 'modes', show: 'set', text: '' });
+      storyOpen = true;
+      render();
+      $('story-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     $('story-panel').addEventListener('toggle', e => (storyOpen = e.target.open));
     // Advanced list
     $('story-kind').value = storyFilter.kind;
@@ -2110,7 +2137,7 @@
                 return `<label class="story-row${varDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}</b><small>${html(name)} · 0x${id.toString(16).toUpperCase()}${note ? ` · ${html(note)}` : ''}</small></span><input type="number" min="0" max="65535" value="${value}" data-story-var="${id}" aria-label="${html(prettyName(name))}" ${off}></label>`;
               }
               const on = flagDraft.get(id) ?? save.flag(id);
-              return `<label class="story-row${flagDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}</b><small>${html(name)} · #${id}</small></span><input type="checkbox" data-story-flag="${id}" ${on ? 'checked' : ''} aria-label="${html(prettyName(name))}" ${off}></label>`;
+              return `<label class="story-row${flagDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}${isMode(name) ? ' <em class="mode-tag">Game mode switch</em>' : ''}</b><small>${html(name)} · #${id}</small></span><input type="checkbox" data-story-flag="${id}" ${on ? 'checked' : ''} aria-label="${html(prettyName(name))}" ${off}></label>`;
             })
             .join('') +
           (list.length > 300
@@ -2154,11 +2181,21 @@
     };
     // Bulk changes cover every flag the search, group and filter match, not only the 300 shown.
     const setShown = on => {
-      for (const [, id] of rows()) {
+      let skipped = 0;
+      for (const [name, id] of rows()) {
+        // Never switch modes, debug options or Frontier symbols on in bulk.
+        if (on && isMode(name)) {
+          if (!save.flag(id)) skipped++;
+          continue;
+        }
         if (on === save.flag(id)) flagDraft.delete(id);
         else flagDraft.set(id, on);
       }
       draw();
+      if (skipped)
+        notify(
+          `Skipped ${skipped} game-mode, debug, Battle Frontier and daily switch${skipped === 1 ? '' : 'es'}. Tick them one at a time if you really want them.`,
+        );
     };
     $('story-set-all').onclick = () => setShown(1);
     $('story-clear-all').onclick = () => setShown(0);
@@ -2190,12 +2227,15 @@
       const name = id => storyFlagName.get(id) || '';
       const hide = plan.flags.filter(([id]) => FLAG_GROUPS.hide[1](name(id))).length,
         items = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.items[1](name(id))).length,
-        defeated = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.defeated[1](name(id))).length;
-      if (n <= 25 && !hide) {
+        defeated = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.defeated[1](name(id))).length,
+        modes = plan.flags.filter(([id, on]) => on && isMode(name(id))).length;
+      if (n <= 25 && !hide && !modes) {
         commit();
         return;
       }
       const risks = [
+        modes &&
+          `${modes} game-mode or debug switch${modes === 1 ? '' : 'es'} will turn on (for example no wild encounters, no catching, auto-win, Safari Zone mode or Frontier symbols). These change how the game plays and looks.`,
         hide &&
           `${hide} flag${hide === 1 ? ' changes' : 's change'} which characters and objects appear. Story characters can vanish or block paths, and some events may never trigger.`,
         items &&

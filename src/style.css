@@ -2470,3 +2470,14 @@ details.panel[open] > summary {
   line-height: 1.55;
   color: var(--ink);
 }
+.mode-tag {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--red);
+  margin-left: 6px;
+}
+.story-mode-warning button {
+  margin-left: 6px;
+  padding: 5px 10px;
+}
