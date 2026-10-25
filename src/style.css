@@ -250,6 +250,21 @@ h1 {
   border-color: #754146;
   color: var(--red);
 }
+.health-banner.warn {
+  flex-wrap: wrap;
+}
+.health-banner .dex-orphans {
+  flex-basis: 100%;
+  color: #e6b25c;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.health-banner .dex-orphans button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
 .health-banner .secondary-text {
   color: var(--muted);
   margin-left: auto;

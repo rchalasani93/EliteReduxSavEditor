@@ -570,6 +570,21 @@
     $('health-banner').innerHTML = save.damaged.length
       ? `<span>${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`
       : `<span>All 20 section checksums pass${save.invalidSlots().length ? `. ${save.invalidSlots().length} unrecognised Pokémon locked` : ''}</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
+    const orphans = save.damaged.length ? [] : save.pokedex().orphans();
+    if (orphans.length) {
+      $('health-banner').classList.add('warn');
+      $('health-banner').insertAdjacentHTML(
+        'beforeend',
+        `<span class="dex-orphans">Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''} ${orphans.length === 1 ? 'is' : 'are'} marked but no Pokémon has ${orphans.length === 1 ? 'it' : 'them'}. The game's Pokédex crashes on ${orphans.length === 1 ? 'it' : 'them'}. <button type="button" id="fix-dex">Clear ${orphans.length === 1 ? 'it' : 'them'}</button></span>`,
+      );
+      $('fix-dex').onclick = () => {
+        if (!guard()) return;
+        apply(
+          () => save.clearPokedexOrphans(),
+          `Cleared ${orphans.length} Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} the game can't show.`,
+        );
+      };
+    }
   }
   // Text a roster entry can be found by: nickname, species name, base species (so "Absol" finds
   // "Absol Mega"), dex number and types.
@@ -1573,13 +1588,13 @@
     const entries = dexEntries(),
       dex = save.pokedex(),
       cap = save.cap();
-    const caughtCount = entries.filter(sp => dex.caught(sp.id)).length;
+    const caughtCount = entries.filter(sp => dex.caught(sp.no)).length;
     // Final stages: species with no ordinary evolution left (Eevee gives all eight
     // Eeveelutions, Gloom both Vileplume and Bellossom). Imported profiles may lack the data.
     const hasEvolutions = entries.some(sp => sp.evolves);
     const isFinal = sp => !sp.evolves?.length;
     const finalCount = entries.filter(isFinal).length;
-    const maxNo = entries.length ? entries[entries.length - 1].id : 1;
+    const maxNo = entries.length ? entries[entries.length - 1].no : 1;
     const dialog = openDialog(
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
@@ -1602,10 +1617,10 @@
         to = +form.elements.to.value || maxNo;
       return entries.filter(
         sp =>
-          sp.id >= Math.min(from, to) &&
-          sp.id <= Math.max(from, to) &&
+          sp.no >= Math.min(from, to) &&
+          sp.no <= Math.max(from, to) &&
           (form.elements.source.value === 'all' ||
-            (form.elements.source.value === 'final' ? isFinal(sp) : dex.caught(sp.id))) &&
+            (form.elements.source.value === 'final' ? isFinal(sp) : dex.caught(sp.no))) &&
           !(form.elements.skipOwned.checked && owned.has(sp.name)),
       );
     };
@@ -2397,11 +2412,9 @@
     seen: 'Seen, not caught',
     none: 'Not seen',
   };
+  // One entry per Pokédex number (sp.no), shown as its base species (sp.id).
   function dexEntries() {
-    const max = save.pokedex().max;
-    return Object.values(catalog.species)
-      .filter(sp => sp.id >= 1 && sp.id <= max && ERCore.baseSpeciesName(catalog, sp) === sp.name)
-      .sort((a, b) => a.id - b.id);
+    return ERCore.pokedexList(catalog).map(({ no, species }) => ({ ...species, no }));
   }
   function renderProgress() {
     const off = save.damaged.length ? 'disabled' : '',
@@ -2413,7 +2426,7 @@
     const roamerSpecies = catalog.species[roamer.species];
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
-    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per species. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
+    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per Pokédex number. Forms (Megas, Primals, regional forms) share their base Pokémon's entry, so Primal Cascoon counts as Cascoon. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
     <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label></div><div class="pocket-chips" id="dex-show" role="group" aria-label="Show species"></div>
     <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
@@ -2441,8 +2454,8 @@
       const q = dexFilter.text.trim().toLocaleLowerCase();
       return entries.filter(
         sp =>
-          (!q || `${sp.name} ${sp.id}`.toLocaleLowerCase().includes(q)) &&
-          (dexFilter.show === 'all' || stateOf(sp.id) === dexFilter.show),
+          (!q || `${sp.name} ${sp.no}`.toLocaleLowerCase().includes(q)) &&
+          (dexFilter.show === 'all' || stateOf(sp.no) === dexFilter.show),
       );
     };
     const pending = () => {
@@ -2452,7 +2465,7 @@
       let s = 0,
         c = 0;
       for (const sp of entries) {
-        const st = stateOf(sp.id);
+        const st = stateOf(sp.no);
         if (st !== 'none') s++;
         if (st === 'caught') c++;
       }
@@ -2480,8 +2493,8 @@
         ? list
             .slice(0, 600)
             .map(sp => {
-              const st = stateOf(sp.id);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.id) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.id}</small><select data-dex="${sp.id}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+              const st = stateOf(sp.no);
+              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
             })
             .join('') +
           (list.length > 600
@@ -2511,7 +2524,7 @@
       b =>
         (b.onclick = () => {
           const st = b.dataset.dexBulk;
-          shown().forEach(sp => setState(sp.id, st));
+          shown().forEach(sp => setState(sp.no, st));
           draw();
         }),
     );
@@ -3039,6 +3052,7 @@
           abilities: s.stats.abis,
           innates: s.stats.inns,
           gender: s.stats.gender === 255 ? 255 : Math.floor(s.stats.gender / 100),
+          dex: s.dex?.id || 0,
           learnset: [],
           forms: [],
         };

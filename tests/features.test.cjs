@@ -440,3 +440,36 @@ test('catalog marks ordinary evolutions so final stages can be picked', () => {
   // Mega Evolution is not an evolution stage.
   assert.ok(!by('Venusaur').evolves);
 });
+
+test('Pokédex uses national numbers, not species IDs', () => {
+  const by = name => Object.values(catalog.species).find(s => s.name === name);
+  // Elite Redux numbers its later species apart from their IDs; forms share the base entry.
+  assert.equal(core.dexNumber(catalog, by('Bulbasaur').id), 1);
+  assert.equal(core.dexNumber(catalog, by('Grotom').id), 1128);
+  assert.equal(core.dexNumber(catalog, by('Cascoon Primal').id), by('Cascoon').id);
+  const list = core.pokedexList(catalog);
+  assert.equal(list.length, new Set(list.map(e => e.no)).size);
+  assert.equal(list.find(e => e.no === 268).species.name, 'Cascoon');
+  assert.ok(!list.some(e => e.no === 1071), '#1071 has no Pokémon');
+
+  const s = new core.Save(fixture(), catalog);
+  assert.throws(() => s.editPokedex({ 1071: 'caught' }), /1071/);
+  s.createMany([{ species: by('Grotom').id, level: 5, moves: [1] }]);
+  assert.ok(s.pokedex().caught(1128));
+  assert.ok(!s.pokedex().caught(by('Grotom').id));
+});
+
+test('Pokédex numbers no Pokémon has are found and cleared', () => {
+  const s = new core.Save(fixture(), catalog);
+  assert.deepEqual(s.pokedex().orphans(), []);
+  s.editPokedex({ 1128: 'caught' });
+  // Without Grotom (#1128) in the game data, its entry becomes one the game can't show.
+  const species = Object.fromEntries(
+    Object.entries(catalog.species).filter(([, sp]) => sp.dex !== 1128),
+  );
+  const t = new core.Save(s.export(), { ...catalog, species });
+  assert.deepEqual(t.pokedex().orphans(), [1128]);
+  assert.deepEqual(t.clearPokedexOrphans(), [1128]);
+  assert.deepEqual(t.pokedex().orphans(), []);
+  assert.ok(!t.pokedex().seen(1128));
+});

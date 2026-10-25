@@ -436,9 +436,45 @@
     const parts = species.key.split('_');
     for (let n = parts.length - 1; n >= 2; n--) {
       const base = index.get(parts.slice(0, n).join('_'));
-      if (base) return base.name;
+      // A form shares its base's Pokédex number; Porygon-Z (SPECIES_PORYGON_Z) is not a Porygon.
+      if (base && (species.dex === undefined || base.dex === species.dex)) return base.name;
     }
     return species.name;
+  }
+  // The Pokédex is indexed by national number, which in Elite Redux differs from the
+  // species ID for later species and is shared by forms. Profiles without numbers (old
+  // imports) fall back to the base species ID, which matches up to Gen 9.
+  function dexNumber(catalog, id) {
+    const species = catalog.species[id];
+    if (!species) return 0;
+    if (species.dex !== undefined) return species.dex;
+    const base = baseSpeciesName(catalog, species);
+    if (base === species.name) return species.id;
+    return Object.values(catalog.species).find(s => s.name === base)?.id || 0;
+  }
+  // One entry per Pokédex number, shown as its base species.
+  const dexListCache = new WeakMap();
+  function pokedexList(catalog) {
+    let list = dexListCache.get(catalog);
+    if (list) return list;
+    const byNo = new Map();
+    for (const s of Object.values(catalog.species)) {
+      const no = dexNumber(catalog, s.id);
+      if (!(no > 0) || no > DEX_BYTES * 8) continue;
+      const current = byNo.get(no),
+        base = baseSpeciesName(catalog, s) === s.name;
+      if (
+        !current ||
+        (base && !current.base) ||
+        (base === current.base && s.id < current.species.id)
+      )
+        byNo.set(no, { no, species: s, base });
+    }
+    list = [...byNo.values()]
+      .sort((a, b) => a.no - b.no)
+      .map(({ no, species }) => ({ no, species }));
+    dexListCache.set(catalog, list);
+    return list;
   }
   class Save {
     constructor(input, catalog) {
@@ -626,7 +662,8 @@
             moves: gift.moves.filter(id => id && this.catalog.moves[id]),
             shiny: gift.shiny ? 1 : 0,
           });
-          dex[sp.id] = 'caught';
+          const no = dexNumber(this.catalog, sp.id);
+          if (no) dex[no] = 'caught';
         }
         if (Object.keys(dex).length) this.editPokedex(dex);
         if (plan.champion) {
@@ -1007,9 +1044,24 @@
           }
           return { seen: s, caught: c };
         },
+        // Numbers marked seen or caught that no Pokémon has. The game's Pokédex looks up
+        // species 0 for them, which crashes it.
+        orphans: () => {
+          const valid = new Set(pokedexList(this.catalog).map(e => e.no)),
+            out = [];
+          for (let n = 1; n <= DEX_BYTES * 8; n++)
+            if ((bit(seen, n) || bit(caught, n)) && !valid.has(n)) out.push(n);
+          return out;
+        },
       };
     }
+    clearPokedexOrphans() {
+      const orphans = this.pokedex().orphans();
+      if (orphans.length) this.editPokedex(Object.fromEntries(orphans.map(n => [n, 'none'])));
+      return orphans;
+    }
     editPokedex(changes) {
+      const valid = new Set(pokedexList(this.catalog).map(e => e.no));
       this.transact('Edit Pokédex', () => {
         const seen = this.read(DEX_SEEN, DEX_BYTES),
           caught = this.read(DEX_CAUGHT, DEX_BYTES);
@@ -1023,6 +1075,10 @@
           const n = integer(+key, 1, DEX_BYTES * 8, 'Pokédex number');
           if (!['none', 'seen', 'caught'].includes(state))
             throw new Error('Pokédex state must be none, seen or caught.');
+          if (state !== 'none' && !valid.has(n))
+            throw new Error(
+              `No Pokémon has Pokédex number ${n}; marking it would crash the game's Pokédex.`,
+            );
           set(seen, n, state !== 'none');
           set(caught, n, state === 'caught');
         }
@@ -1389,12 +1445,11 @@
           const target = free.shift();
           if (!target) break;
           this.placeRecord(target, this.newRecord(options));
-          dex[options.species] = 'caught';
+          const no = dexNumber(this.catalog, options.species);
+          if (no) dex[no] = 'caught';
           placed++;
         }
-        const max = DEX_BYTES * 8;
-        const caught = Object.fromEntries(Object.entries(dex).filter(([id]) => +id <= max));
-        if (Object.keys(caught).length) this.editPokedex(caught);
+        if (Object.keys(dex).length) this.editPokedex(dex);
       });
       return placed;
     }
@@ -1724,6 +1779,8 @@
     toShowdown,
     parseShowdown,
     baseSpeciesName,
+    dexNumber,
+    pokedexList,
     sanitizeName,
     STATUS,
     LANGUAGES,

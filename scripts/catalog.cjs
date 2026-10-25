@@ -146,6 +146,9 @@ for (const s of data.species) {
     abilities: three(s.stats.abis),
     innates: three(s.stats.inns),
     gender: s.stats.gender === 255 ? 255 : Math.floor(s.stats.gender / 100),
+    // National Pokédex number. Elite Redux numbers its later species apart from their
+    // species IDs (Grotom is species 1097 but #1128), and forms share their base's number.
+    dex: s.dex?.id || 0,
     learnset: unique([...s.levelUpMoves.map(m => m.id), ...s.TMHMMoves, ...s.tutor, ...s.eggMoves]),
     // Mega and primal forms. Nextdex stores evolution targets as positions in its species array.
     forms: s.evolutions
