@@ -2334,3 +2334,16 @@ details.panel[open] > summary {
     padding-right: 12px;
   }
 }
+/* Preview build published under /dev/ */
+.dev-banner {
+  padding: 9px 16px;
+  background: #2a2414;
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 12px;
+  text-align: center;
+}
+.dev-banner a {
+  color: inherit;
+  font-weight: 600;
+}

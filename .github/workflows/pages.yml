@@ -37,20 +37,50 @@ jobs:
         run: npm test
       - name: Build standalone editor
         run: npm run build
+      # The site holds two builds: main at the root (production) and develop under /dev/.
+      # A Pages deployment replaces the whole site, so both are rebuilt on every publish.
+      - name: Check out main for the site root
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: site-src/main
+          persist-credentials: false
+      - name: Check out develop for /dev/
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: develop
+          path: site-src/develop
+          persist-credentials: false
+      - name: Assemble production and dev sites
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        run: |
+          (cd site-src/main && npm run build)
+          (cd site-src/develop && ER_CHANNEL=dev npm run build)
+          mkdir -p _site/dev
+          cp -R site-src/main/dist/. _site/
+          cp -R site-src/develop/dist/. _site/dev/
       - name: Upload website
         if: >-
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main'
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: dist
+          path: _site
           retention-days: 1
 
   deploy:
-    # Production publishes from main; develop and pull requests only validate.
+    # Pushes to main or develop publish both builds; pull requests only validate.
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main'
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -82,13 +82,14 @@ Binary and browser verification can establish export integrity; in-emulator veri
 
 ## GitHub Pages
 
-The included `.github/workflows/pages.yml` runs the tests and builds the editor for pushes and pull requests targeting `main` or `develop`, and for merge queue checks. It can also be started manually from the repository's Actions tab. Successful pushes and manual runs on `main` deploy only `dist/`; `develop`, pull requests, and other branches only validate the build. The workflow uses GitHub's built-in token and needs no additional secrets or dependency installation. This is the sole Pages deployment workflow; the repository does not use Jekyll.
+The included `.github/workflows/pages.yml` runs the tests and builds the editor for pushes and pull requests targeting `main` or `develop`, and for merge queue checks. It can also be started manually from the repository's Actions tab. The site has two environments: **production** at the site root, built from `main`, and a **dev preview** at `/dev/`, built from `develop` with a banner marking it as a preview (and `noindex`, so search engines skip it). A Pages deployment replaces the whole site, so every successful push or manual run on `main` or `develop` checks out both branches, builds each, and publishes them together. Pull requests and other branches only validate the build. The workflow uses GitHub's built-in token and needs no additional secrets or dependency installation. This is the sole Pages deployment workflow; the repository does not use Jekyll.
 
 1. Create a GitHub repository, for example `elite-redux-save-editor`. Use a public repository for GitHub Pages on GitHub Free.
-2. Keep the workflows on both `main` and `develop`. Push to `develop` to validate changes, then merge into `main` to publish.
+2. Keep the workflows on both `main` and `develop`. Push to `develop` to publish the dev preview at `/dev/`, then merge into `main` to publish production.
 3. In the repository, open **Settings → Pages → Build and deployment**, and set **Source** to **GitHub Actions**.
 4. Open **Actions → Deploy editor to GitHub Pages**. If the first run started before Pages was enabled, rerun it or use **Run workflow**.
 5. After the deployment succeeds, open the URL shown in **Settings → Pages**, normally `https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`.
+6. For the dev preview, open **Settings → Environments → github-pages** and make sure **Deployment branches and tags** allows `develop` as well as `main`; otherwise deployments from `develop` are rejected. The preview is then at `https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/dev/`.
 
 The editor embeds its assets, so it works under the repository URL without a custom base path. Leave `dist/` and `Redux Save Studio.html` out of Git; the workflow generates them.
 
