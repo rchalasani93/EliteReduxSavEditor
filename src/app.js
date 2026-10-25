@@ -285,6 +285,8 @@
   function discardPending() {
     bagDraft.clear();
     dexDraft.clear();
+    flagDraft.clear();
+    varDraft.clear();
     dirty = false;
     render();
     sync();
@@ -685,6 +687,10 @@
     }
     if (tab === 'finder') {
       renderFinder();
+      return;
+    }
+    if (tab === 'story') {
+      renderStory();
       return;
     }
     const m = mon();
@@ -1832,6 +1838,317 @@
     };
     drawBag();
   }
+  // ---- Story tab: badges, gym leaders, Champion, and story flags and variables ---------------
+  // Milestones replay the game's own event scripts (bundled from the Elite Redux source by
+  // scripts/story.cjs), so a save ends up as if the event had played.
+  const story = JSON.parse($('story-data').textContent);
+  const storyFlagName = new Map(Object.entries(story.flags).map(([n, id]) => [id, n]));
+  const storyVarName = new Map(Object.entries(story.vars).map(([n, id]) => [id, n]));
+  const flagDraft = new Map(),
+    varDraft = new Map();
+  let storyFilter = { text: '', kind: 'vars', show: 'all' };
+  const prettyName = name =>
+    name
+      .replace(/^(FLAG|VAR)_/, '')
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  const SKIPPED_TEXT = {
+    SetChampionSaveWarp: 'Where Continue starts: you keep playing from where you saved.',
+    UpdateTrainerFanClubGameClear: 'The Trainer Fan Club’s post-game update.',
+    ResetHealLocationFromDewford: 'Where you return after a whiteout.',
+  };
+  const SCREEN_ONLY =
+    /^(special (DrawWholeMapView|PetalburgGymUnlockRoomDoors)|warp|givecustommon)\b/;
+  function storyState() {
+    return {
+      flag: id => save.flag(id),
+      getVar: id => save.getVar(id - story.varsStart),
+      hasItem: id => save.hasItem(id),
+      gender: save.trainerCard().gender,
+    };
+  }
+  // VAR_FACING only decides which way a character walks in Norman's scene.
+  const replayEvent = (entry, start = []) =>
+    ERStory.replay(story, entry, storyState(), { start, assume: { VAR_FACING: 2 } });
+  const planOf = (r, withGifts) => ({
+    flags: [...r.flags],
+    vars: [...r.vars],
+    items: [...r.items],
+    gifts: withGifts ? r.gifts : [],
+  });
+  function giftLabel(g) {
+    const sp = catalog.species[g.species];
+    return `${sp ? sp.name : g.name} (Lv. ${g.level || 'party max'}${g.shiny ? ', shiny' : ''})`;
+  }
+  function freeSlots() {
+    let n = 6 - save.partyCount;
+    for (let b = 0; b < 26; b++) n += save.box(b).filter(m => !m.species).length;
+    return n;
+  }
+  function describeEvent(r, extraNotSaved = []) {
+    const change = [
+      ...[...r.flags].map(
+        ([id, on]) =>
+          `${on ? 'Set' : 'Clear'} ${prettyName(storyFlagName.get(id) || `flag ${id}`)}`,
+      ),
+      ...[...r.vars].map(
+        ([id, n]) =>
+          `${prettyName(storyVarName.get(id) || `variable ${id}`)}: ${save.getVar(id - story.varsStart)} → ${n}`,
+      ),
+    ];
+    const notSaved = [
+      ...new Set(
+        r.skipped
+          .filter(text => !SCREEN_ONLY.test(text))
+          .map(text => {
+            const name = /^special (\w+)/.exec(text)?.[1];
+            return SKIPPED_TEXT[name] || `Game routine ${name || text} (not reproduced).`;
+          }),
+      ),
+      ...extraNotSaved,
+    ];
+    return `<p class="field-help">${change.length} event flag and story variable change${change.length === 1 ? '' : 's'}${r.items.size ? ` · items: ${[...r.items].map(id => html(catalog.items[id]?.name || `#${id}`)).join(', ')}` : ''}.</p>${change.length ? `<details class="story-changes"><summary>Show every change</summary><ul>${change.map(c => `<li>${html(c)}</li>`).join('')}</ul></details>` : ''}${notSaved.length ? `<p class="field-help">Not changed by the editor: ${notSaved.map(html).join(' ')}</p>` : ''}`;
+  }
+  function confirmStoryEvent(
+    title,
+    intro,
+    r,
+    onApply,
+    { extraNotSaved = [], extraGifts = [] } = {},
+  ) {
+    const gifts = [...extraGifts, ...r.gifts];
+    const room = freeSlots();
+    const dialog = openDialog(
+      title,
+      intro,
+      `${describeEvent(r, extraNotSaved)}${gifts.length ? `<label class="checkrow story-gift"><input type="checkbox" data-gifts ${room >= gifts.length ? 'checked' : 'disabled'}> Also receive the gift Pokémon: ${gifts.map(giftLabel).map(html).join(', ')}${room < gifts.length ? ' (no room in your party or PC)' : ''}</label>` : ''}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Apply</button></div></div>`,
+    );
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      const withGifts = !!dialog.querySelector('[data-gifts]')?.checked;
+      closeDialog(dialog);
+      onApply(withGifts);
+    };
+  }
+  function beatLeader(g) {
+    if (!guard(() => beatLeader(g))) return;
+    let r;
+    try {
+      r = replayEvent(g.entry);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    confirmStoryEvent(
+      `Beat ${g.leader}`,
+      `Applies what winning at the ${g.city} Gym does in the game: the ${g.badge}, the gym's defeated flag, its prizes and the story changes that follow.`,
+      r,
+      withGifts =>
+        applyStructural(() => {
+          save.applyStory(planOf(r, withGifts), `Beat ${g.leader} (${g.badge})`);
+        }, `${g.leader} beaten. ${g.badge} earned.`),
+    );
+  }
+  function becomeChampion() {
+    if (!guard(becomeChampion)) return;
+    const missing = story.gyms.filter(g => !save.flag(g.gymFlag));
+    let r;
+    try {
+      r = replayEvent(story.champion.entry, story.champion.before);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    const gymGifts = [];
+    try {
+      // Preview the gifts of the gyms that would be beaten first (each gym's own gift only).
+      for (const g of missing) gymGifts.push(...replayEvent(g.entry).gifts);
+    } catch {}
+    confirmStoryEvent(
+      'Become Champion',
+      `Applies the Hall of Fame: Champion status, the game-clear flag the post-game checks, and the story changes the game makes when the credits roll.${missing.length ? ` First beats the ${missing.length} gym leader${missing.length === 1 ? '' : 's'} you haven't beaten (${missing.map(g => g.leader).join(', ')}), as Beat leader would.` : ''}`,
+      r,
+      withGifts =>
+        applyStructural(() => {
+          save.transact('Become Champion', () => {
+            for (const g of missing)
+              save.applyStory(planOf(replayEvent(g.entry), withGifts), `Beat ${g.leader}`);
+            const champ = replayEvent(story.champion.entry, story.champion.before);
+            const plan = planOf(champ, withGifts);
+            plan.flags.push([story.champion.gameClear, 1], [story.champion.isChampion, 1]);
+            plan.champion = true;
+            save.applyStory(plan, 'Become Champion');
+          });
+        }, 'You are now the Champion. The post-game is unlocked.'),
+      {
+        extraGifts: gymGifts,
+        extraNotSaved: [
+          'Hall of Fame team records (the trainer card still shows a Hall of Fame entry).',
+          'Champion Ribbons.',
+        ],
+      },
+    );
+  }
+  function renderStory() {
+    const off = save.damaged.length ? 'disabled' : '',
+      cleared = save.flag(story.champion.gameClear),
+      badges = story.gyms.filter(g => save.flag(g.badgeFlag)).length;
+    $('editor-panel').innerHTML =
+      `<div class="page-heading"><h1>Story and league.</h1><p>Badges, gym leaders and the Champion, replayed from the game's own event scripts, plus every story flag and variable.</p></div>
+    <section class="panel" id="league-panel"><div class="panel-heading"><h2>BADGES & GYM LEADERS</h2><span>${badges} of 8 badges</span></div><p class="notice">A badge on its own only counts for level caps and field moves. <b>Beat leader</b> does everything winning that gym does in the game: the badge, the gym's defeated flag, its TM and gift, and the story that moves on afterwards. It is safest in gym order, because beating a gym early also moves that town's story along.</p>
+    <div class="gym-list">${story.gyms
+      .map((g, i) => {
+        const badge = save.flag(g.badgeFlag),
+          beaten = save.flag(g.gymFlag);
+        return `<div class="gym-row"><label class="gym-badge"><input type="checkbox" data-badge="${i}" ${badge ? 'checked' : ''} ${off}> <span><b>${html(g.badge)}</b><small>${html(g.leader)} · ${html(g.city)}</small></span></label><span class="gym-status${beaten ? ' done' : ''}">${beaten ? 'Leader beaten' : badge ? 'Badge only' : 'Not earned'}</span><button type="button" data-beat="${i}" ${beaten || off ? 'disabled' : ''}>${beaten ? 'Beaten' : 'Beat leader…'}</button></div>`;
+      })
+      .join(
+        '',
+      )}</div><div class="actions-inline" style="margin-top:14px"><button type="button" id="all-badges" ${badges === 8 || off ? 'disabled' : ''}>Give all 8 badges</button></div></section>
+    <section class="panel"><div class="panel-heading"><h2>ELITE FOUR & CHAMPION</h2><span>${cleared ? 'Champion · game cleared' : 'Not cleared yet'}</span></div><p class="field-help" style="margin-top:0">${cleared ? 'This save has entered the Hall of Fame, so the post-game is open.' : 'Becoming Champion sets what the game sets after the Hall of Fame: the game-clear flag the post-game checks for, Champion status, the post-game story (the S.S. Tidal, Steven’s house, Cynthia and more), the Hall of Fame count on your trainer card and a fully healed party. The Elite Four reset for rematches, as in the game.'}</p><div class="actions-inline"><button type="button" class="primary" id="become-champion" ${cleared || off ? 'disabled' : ''}>${cleared ? 'Already Champion' : 'Become Champion…'}</button></div></section>
+    <details class="panel" id="story-panel" ${storyOpen ? 'open' : ''}><summary class="panel-heading"><h2>STORY FLAGS & VARIABLES</h2><span>Advanced · every named event flag and story variable</span></summary><p class="notice warning">These are the game's raw story switches. Changing one without the others an event normally changes can leave characters missing or stuck, so change only what you understand, keep a backup, and prefer the buttons above.</p>
+    <div class="bag-tools"><label class="field"><span>Search</span><input id="story-search" type="search" value="${html(storyFilter.text)}" placeholder="For example Rustboro, Steven or Badge" autocomplete="off"></label><label class="field"><span>Show</span><select id="story-kind"><option value="vars">Story variables</option><option value="flags">Event flags</option></select></label><label class="field"><span>Filter</span><select id="story-show"><option value="all">All</option><option value="set">Set or non-zero</option><option value="changed">Changed here</option></select></label></div>
+    <div id="story-list" class="story-list"></div><div class="form-footer"><p id="story-pending">No pending story changes.</p><div class="actions-inline"><button type="button" id="story-discard">Discard</button><button type="button" class="primary" id="story-apply" data-dirty-apply ${off}>Apply story changes</button></div></div></details>
+    <p class="field-help">Story data comes from the Elite Redux source (${html(story.source)}) and was checked against 2.65.4.11b saves.</p>`;
+    document.querySelectorAll('[data-badge]').forEach(
+      box =>
+        (box.onchange = () => {
+          const g = story.gyms[+box.dataset.badge];
+          if (!guard()) {
+            box.checked = !box.checked;
+            return;
+          }
+          apply(
+            () =>
+              save.applyStory(
+                { flags: [[g.badgeFlag, box.checked ? 1 : 0]] },
+                `${box.checked ? 'Give' : 'Remove'} ${g.badge}`,
+              ),
+            `${g.badge} ${box.checked ? 'added' : 'removed'}.`,
+          );
+        }),
+    );
+    document
+      .querySelectorAll('[data-beat]')
+      .forEach(b => (b.onclick = () => beatLeader(story.gyms[+b.dataset.beat])));
+    $('all-badges').onclick = () => {
+      if (!guard()) return;
+      apply(
+        () =>
+          save.applyStory({ flags: story.gyms.map(g => [g.badgeFlag, 1]) }, 'Give all 8 badges'),
+        'All 8 badges added.',
+      );
+    };
+    $('become-champion').onclick = becomeChampion;
+    $('story-panel').addEventListener('toggle', e => (storyOpen = e.target.open));
+    // Advanced list
+    $('story-kind').value = storyFilter.kind;
+    $('story-show').value = storyFilter.show;
+    const rows = () => {
+      const q = storyFilter.text.trim().toLowerCase().replace(/\s+/g, '_');
+      const source =
+        storyFilter.kind === 'vars'
+          ? Object.entries(story.vars).filter(([n]) => !/^VAR_(TEMP|OBJ_GFX_ID)_/.test(n))
+          : Object.entries(story.flags);
+      return source
+        .filter(([n, id]) => {
+          if (q && !n.toLowerCase().includes(q)) return false;
+          const draft = storyFilter.kind === 'vars' ? varDraft : flagDraft;
+          if (storyFilter.show === 'changed') return draft.has(id);
+          if (storyFilter.show === 'set')
+            return storyFilter.kind === 'vars'
+              ? (draft.get(id) ?? save.getVar(id - story.varsStart)) !== 0
+              : !!(draft.get(id) ?? save.flag(id));
+          return true;
+        })
+        .sort((a, b) => a[1] - b[1]);
+    };
+    const pending = () => {
+      const n = flagDraft.size + varDraft.size;
+      dirty = n > 0;
+      $('story-panel').classList.toggle('is-dirty', dirty);
+      $('story-pending').textContent = n
+        ? `${n} pending story change${n === 1 ? '' : 's'} · apply to save them`
+        : 'No pending story changes.';
+      sync();
+    };
+    const draw = () => {
+      const list = rows();
+      $('story-list').innerHTML = list.length
+        ? list
+            .slice(0, 300)
+            .map(([name, id]) => {
+              if (storyFilter.kind === 'vars') {
+                const value = varDraft.get(id) ?? save.getVar(id - story.varsStart),
+                  note = story.varNotes[name];
+                return `<label class="story-row${varDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}</b><small>${html(name)} · 0x${id.toString(16).toUpperCase()}${note ? ` · ${html(note)}` : ''}</small></span><input type="number" min="0" max="65535" value="${value}" data-story-var="${id}" aria-label="${html(prettyName(name))}" ${off}></label>`;
+              }
+              const on = flagDraft.get(id) ?? save.flag(id);
+              return `<label class="story-row${flagDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}</b><small>${html(name)} · #${id}</small></span><input type="checkbox" data-story-flag="${id}" ${on ? 'checked' : ''} aria-label="${html(prettyName(name))}" ${off}></label>`;
+            })
+            .join('') +
+          (list.length > 300
+            ? `<p class="field-help">Showing 300 of ${list.length}. Search to narrow the list.</p>`
+            : '')
+        : '<p class="field-help">Nothing matches.</p>';
+      pending();
+    };
+    $('story-list').oninput = e => {
+      const v = e.target.closest('[data-story-var]'),
+        f = e.target.closest('[data-story-flag]');
+      if (v) {
+        const id = +v.dataset.storyVar,
+          n = Number(v.value);
+        if (!Number.isInteger(n) || n < 0 || n > 65535) return;
+        if (n === save.getVar(id - story.varsStart)) varDraft.delete(id);
+        else varDraft.set(id, n);
+        v.parentElement.classList.toggle('changed', varDraft.has(id));
+      }
+      if (f) {
+        const id = +f.dataset.storyFlag,
+          on = f.checked ? 1 : 0;
+        if (on === save.flag(id)) flagDraft.delete(id);
+        else flagDraft.set(id, on);
+        f.parentElement.classList.toggle('changed', flagDraft.has(id));
+      }
+      pending();
+    };
+    $('story-search').oninput = e => {
+      storyFilter.text = e.target.value;
+      draw();
+    };
+    $('story-kind').onchange = e => {
+      storyFilter.kind = e.target.value;
+      draw();
+    };
+    $('story-show').onchange = e => {
+      storyFilter.show = e.target.value;
+      draw();
+    };
+    $('story-discard').onclick = () => {
+      flagDraft.clear();
+      varDraft.clear();
+      draw();
+    };
+    $('story-apply').onclick = () => {
+      const n = flagDraft.size + varDraft.size;
+      if (!n) {
+        notify('No story changes to apply.');
+        return;
+      }
+      const plan = { flags: [...flagDraft], vars: [...varDraft] };
+      apply(
+        () => {
+          save.applyStory(plan, `Edit ${n} story value${n === 1 ? '' : 's'}`);
+          flagDraft.clear();
+          varDraft.clear();
+        },
+        `${n} story value${n === 1 ? '' : 's'} updated.`,
+      );
+    };
+    draw();
+  }
+  let storyOpen = false;
   // ---- Progress tab: Pokédex, game stats, nuzlocke, roamer, clock -----------------------------
   let dexDraft = new Map(),
     dexFilter = { text: '', show: 'all' };

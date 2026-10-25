@@ -2347,3 +2347,110 @@ details.panel[open] > summary {
   color: inherit;
   font-weight: 600;
 }
+/* Story tab */
+.gym-list {
+  display: grid;
+  gap: 8px;
+}
+.gym-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #101822;
+}
+.gym-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.gym-badge input {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+.gym-badge small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.gym-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+.gym-status.done {
+  color: var(--green);
+}
+.story-list {
+  display: grid;
+  gap: 6px;
+  max-height: 560px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.story-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #101822;
+  font-size: 12px;
+}
+.story-row.changed {
+  border-color: var(--accent);
+}
+.story-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.story-row input[type='number'] {
+  width: 96px;
+  flex: none;
+}
+.story-row input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+.story-changes {
+  margin: 8px 0;
+  font-size: 12px;
+}
+.story-changes summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.story-changes ul {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.story-gift {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .gym-row {
+    grid-template-columns: 1fr auto;
+  }
+  .gym-row button {
+    grid-column: 1 / -1;
+  }
+}

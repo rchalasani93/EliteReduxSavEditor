@@ -80,6 +80,11 @@
             Name, IDs, play time, money, coins, Battle Points, box names and wallpapers, and every
             item in your bag.
           </dd>
+          <dt>Story</dt>
+          <dd>
+            Badges, gym leaders and becoming Champion, replayed from the game's own event scripts,
+            plus every story flag and variable.
+          </dd>
           <dt>Progress</dt>
           <dd>
             Pokédex seen and caught, game stats, nuzlocke route tracking and the in-game clock.
@@ -167,7 +172,7 @@
               ><button data-tab="randomizer">Ability lab</button
               ><button data-tab="finder">Species finder</button
               ><button data-tab="trainer">Trainer & bag</button
-              ><button data-tab="progress">Progress</button
+              ><button data-tab="progress">Progress</button><button data-tab="story">Story</button
               ><button data-tab="settings">Game settings</button
               ><button data-tab="review">Review & export <span id="change-count">0</span></button>
             </nav>
@@ -176,7 +181,7 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.7.0</span></span
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.8.0</span></span
         ><span class="footer-links"
           ><button id="privacy-button" class="text-button">Privacy</button
           ><button id="terms-button" class="text-button">Terms</button></span
@@ -297,6 +302,12 @@
     </script>
     <script id="rng-code">
       /* RNG */
+    </script>
+    <script id="story-data" type="application/json">
+      /* STORY_DATA */
+    </script>
+    <script id="story-code">
+      /* STORY */
     </script>
     <script id="html-code">
       /* HTML */

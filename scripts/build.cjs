@@ -9,6 +9,8 @@ for (const [marker, file] of [
   ['ICONS', 'icons.json'],
   ['CORE', 'core.js'],
   ['RNG', 'rng.js'],
+  ['STORY_DATA', 'story.json'],
+  ['STORY', 'story.js'],
   ['HTML', 'html.js'],
   ['APP', 'app.js'],
 ])

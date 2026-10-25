@@ -54,6 +54,10 @@
   // (its berry trees are 8 bytes and extra SaveBlock1/2 data shifts later fields), so each one was anchored to
   // recognisable data: game stats = save counter + steps, Pokédex caught ⊆ seen and matching owned species,
   // roamer species directly before the Pokédex, quest/nuzlocke tail ending with the start-menu item count.
+  // Event flags (FLAGS_COUNT 6135 in Elite Redux, so 767 bytes) and the story variables
+  // that follow them in save block 1.
+  const FLAGS = 3 * DATA + 0x984,
+    FLAG_BYTES = 767;
   const VARS = SB1 + 0x1c78,
     GAME_STATS = SB1 + 0x1e78,
     ROAMER = SB1 + 0x2e40,
@@ -574,8 +578,76 @@
       return new DataView(this.read(VARS + id * 2, 2).buffer).getUint16(0, true);
     }
     flag(id) {
-      const x = 3 * DATA + 0x984 + (id >>> 3);
+      const x = FLAGS + (id >>> 3);
       return (this.read(x, 1)[0] >>> (id & 7)) & 1;
+    }
+    // Story state: event flags, story variables (0x4000-0x40FF), items, gift Pokémon and the
+    // Hall of Fame bookkeeping, written together as one undoable edit.
+    applyStory(plan, label = 'Edit story progress') {
+      this.transact(label, () => {
+        const flagBytes = this.read(FLAGS, FLAG_BYTES);
+        for (const [id, on] of plan.flags || []) {
+          integer(id, 0, FLAG_BYTES * 8 - 1, 'Flag');
+          if (on) flagBytes[id >>> 3] |= 1 << (id & 7);
+          else flagBytes[id >>> 3] &= ~(1 << (id & 7));
+        }
+        this.write(FLAGS, flagBytes);
+        for (const [id, value] of plan.vars || []) {
+          integer(id, 0x4000, 0x40ff, 'Variable');
+          const a = new Uint8Array(2);
+          new DataView(a.buffer).setUint16(0, integer(value, 0, 0xffff, 'Variable value'), true);
+          this.write(VARS + (id - 0x4000) * 2, a);
+        }
+        const items = plan.items || [];
+        if (items.length) this.editItems(Object.fromEntries(items.map(id => [id, true])));
+        const dex = {};
+        for (const gift of plan.gifts || []) {
+          const sp = this.catalog.species[gift.species];
+          if (!sp) throw new Error('A gift Pokémon is not in this game data.');
+          const level = gift.level || Math.max(1, ...this.party().map(m => m.level));
+          const target =
+            this.partyCount < 6 ? { kind: 'party', slot: this.partyCount } : this.firstEmptyBox(0);
+          if (!target)
+            throw new Error('There is no room in your party or PC for the gift Pokémon.');
+          const slots = [0, 1, 2].filter(i => sp.abilities[i]);
+          const abilitySlot = slots.includes(gift.abilityNum)
+            ? gift.abilityNum
+            : (slots[randomInt(slots.length)] ?? 0);
+          // The game lists EVs as HP, Attack, Defense, Speed, Sp. Atk, Sp. Def.
+          const [hp, atk, def, spe, spa, spd] = gift.evs.map(n => (n === 255 ? 0 : n));
+          this.createMon(target, {
+            species: sp.id,
+            level,
+            heldItem: this.catalog.items[gift.item] ? gift.item : 0,
+            ball: gift.ball > 0 && gift.ball <= 31 ? gift.ball : 4,
+            nature: gift.nature >= 0 && gift.nature < 25 ? gift.nature : undefined,
+            abilitySlot,
+            evs: [hp, atk, def, spa, spd, spe],
+            moves: gift.moves.filter(id => id && this.catalog.moves[id]),
+            shiny: gift.shiny ? 1 : 0,
+          });
+          dex[sp.id] = 'caught';
+        }
+        if (Object.keys(dex).length) this.editPokedex(dex);
+        if (plan.champion) {
+          const key = this.encryptionKey(),
+            stat = id =>
+              (new DataView(this.read(GAME_STATS + id * 4, 4).buffer).getUint32(0, true) ^ key) >>>
+              0,
+            setStat = (id, n) => {
+              const a = new Uint8Array(4);
+              new DataView(a.buffer).setUint32(0, (n ^ key) >>> 0, true);
+              this.write(GAME_STATS + id * 4, a);
+            };
+          // GAME_STAT_FIRST_HOF_PLAY_TIME and GAME_STAT_ENTERED_HOF, as the game records them.
+          if (!stat(1)) {
+            const t = this.trainerCard();
+            setStat(1, (Math.min(t.hours, 999) << 16) | (t.minutes << 8) | t.seconds);
+          }
+          setStat(10, Math.min(999, stat(10) + 1));
+          this.healParty();
+        }
+      });
     }
     badge() {
       if (this.flag(2885)) return 9;
@@ -592,17 +664,22 @@
       ][opts.levelCaps][this.badge()];
     }
     transact(label, fn) {
+      // A transaction inside another one joins it, so a combined edit undoes as one step.
+      if (this.inTransaction) return fn();
       if (this.damaged.length)
         throw new Error(
           'Editing is disabled because this save has a failed checksum. Restore an undamaged backup.',
         );
       const before = this.bytes.slice();
+      this.inTransaction = true;
       try {
         fn();
         this.rechecksum();
       } catch (error) {
         this.bytes = before;
         throw error;
+      } finally {
+        this.inTransaction = false;
       }
       if (!this.bytes.some((b, i) => b !== before[i])) return;
       this.undoStack.push({ bytes: before, label });
@@ -1179,7 +1256,10 @@
       let nick = o.nickname;
       if (nick === undefined) nick = sanitizeName(baseSpeciesName(this.catalog, species), 12);
       a.set(encode(nick, 12), 38);
-      a[50] = 4 | ((o.speedDown ? 1 : 0) << 5) | ((o.otGender ?? t.gender) << 6);
+      a[50] =
+        integer(o.ball ?? 4, 0, 31, 'Poké Ball') |
+        ((o.speedDown ? 1 : 0) << 5) |
+        ((o.otGender ?? t.gender) << 6);
       a[30] = o.metLocation ?? 0xff;
       const hpType =
         o.hpType ?? [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18][randomInt(18)];
