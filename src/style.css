@@ -2454,3 +2454,19 @@ details.panel[open] > summary {
     grid-column: 1 / -1;
   }
 }
+.story-flag-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 0 0 14px;
+}
+.story-flag-tools .field {
+  min-width: min(320px, 100%);
+}
+.story-risks {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  line-height: 1.55;
+  color: var(--ink);
+}

@@ -1846,7 +1846,24 @@
   const storyVarName = new Map(Object.entries(story.vars).map(([n, id]) => [id, n]));
   const flagDraft = new Map(),
     varDraft = new Map();
-  let storyFilter = { text: '', kind: 'vars', show: 'all' };
+  let storyFilter = { text: '', kind: 'vars', show: 'all', group: 'all' };
+  // Flag groups by the game's naming, so bulk changes can target one kind of flag.
+  const FLAG_GROUPS = {
+    all: ['All flags', () => true],
+    visited: ['Places visited (Fly destinations)', n => /^FLAG_(VISITED|LANDMARK)_/.test(n)],
+    received: ['Gifts received', n => /^FLAG_RECEIVED_/.test(n)],
+    defeated: ['Defeated trainers and Pokémon', n => /^FLAG_DEFEATED_/.test(n)],
+    items: ['Items picked up (visible and hidden)', n => /^FLAG_(ITEM|HIDDEN_ITEM)_/.test(n)],
+    system: ['Game features and badges', n => /^FLAG_(SYS|BADGE)/.test(n)],
+    hide: ['Characters and objects shown or hidden', n => /^FLAG_(HIDE|SHOW)_/.test(n)],
+    other: [
+      'Everything else',
+      n =>
+        !/^FLAG_(VISITED_|LANDMARK_|RECEIVED_|DEFEATED_|ITEM_|HIDDEN_ITEM_|SYS|BADGE|HIDE_|SHOW_)/.test(
+          n,
+        ),
+    ],
+  };
   const prettyName = name =>
     name
       .replace(/^(FLAG|VAR)_/, '')
@@ -2008,6 +2025,13 @@
     <section class="panel"><div class="panel-heading"><h2>ELITE FOUR & CHAMPION</h2><span>${cleared ? 'Champion · game cleared' : 'Not cleared yet'}</span></div><p class="field-help" style="margin-top:0">${cleared ? 'This save has entered the Hall of Fame, so the post-game is open.' : 'Becoming Champion sets what the game sets after the Hall of Fame: the game-clear flag the post-game checks for, Champion status, the post-game story (the S.S. Tidal, Steven’s house, Cynthia and more), the Hall of Fame count on your trainer card and a fully healed party. The Elite Four reset for rematches, as in the game.'}</p><div class="actions-inline"><button type="button" class="primary" id="become-champion" ${cleared || off ? 'disabled' : ''}>${cleared ? 'Already Champion' : 'Become Champion…'}</button></div></section>
     <details class="panel" id="story-panel" ${storyOpen ? 'open' : ''}><summary class="panel-heading"><h2>STORY FLAGS & VARIABLES</h2><span>Advanced · every named event flag and story variable</span></summary><p class="notice warning">These are the game's raw story switches. Changing one without the others an event normally changes can leave characters missing or stuck, so change only what you understand, keep a backup, and prefer the buttons above.</p>
     <div class="bag-tools"><label class="field"><span>Search</span><input id="story-search" type="search" value="${html(storyFilter.text)}" placeholder="For example Rustboro, Steven or Badge" autocomplete="off"></label><label class="field"><span>Show</span><select id="story-kind"><option value="vars">Story variables</option><option value="flags">Event flags</option></select></label><label class="field"><span>Filter</span><select id="story-show"><option value="all">All</option><option value="set">Set or non-zero</option><option value="changed">Changed here</option></select></label></div>
+    <div class="story-flag-tools" id="story-flag-tools"><label class="field"><span>Flag group</span><select id="story-group">${Object.entries(
+      FLAG_GROUPS,
+    )
+      .map(([k, [label]]) => `<option value="${k}">${html(label)}</option>`)
+      .join(
+        '',
+      )}</select></label><div class="actions-inline"><button type="button" id="story-set-all" ${off}>Set all shown</button><button type="button" id="story-clear-all" ${off}>Clear all shown</button></div></div>
     <div id="story-list" class="story-list"></div><div class="form-footer"><p id="story-pending">No pending story changes.</p><div class="actions-inline"><button type="button" id="story-discard">Discard</button><button type="button" class="primary" id="story-apply" data-dirty-apply ${off}>Apply story changes</button></div></div></details>
     <p class="field-help">Story data comes from the Elite Redux source (${html(story.source)}) and was checked against 2.65.4.11b saves.</p>`;
     document.querySelectorAll('[data-badge]').forEach(
@@ -2053,6 +2077,7 @@
       return source
         .filter(([n, id]) => {
           if (q && !n.toLowerCase().includes(q)) return false;
+          if (storyFilter.kind === 'flags' && !FLAG_GROUPS[storyFilter.group][1](n)) return false;
           const draft = storyFilter.kind === 'vars' ? varDraft : flagDraft;
           if (storyFilter.show === 'changed') return draft.has(id);
           if (storyFilter.show === 'set')
@@ -2073,6 +2098,7 @@
       sync();
     };
     const draw = () => {
+      $('story-flag-tools').hidden = storyFilter.kind !== 'flags';
       const list = rows();
       $('story-list').innerHTML = list.length
         ? list
@@ -2121,6 +2147,21 @@
       storyFilter.kind = e.target.value;
       draw();
     };
+    $('story-group').value = storyFilter.group;
+    $('story-group').onchange = e => {
+      storyFilter.group = e.target.value;
+      draw();
+    };
+    // Bulk changes cover every flag the search, group and filter match, not only the 300 shown.
+    const setShown = on => {
+      for (const [, id] of rows()) {
+        if (on === save.flag(id)) flagDraft.delete(id);
+        else flagDraft.set(id, on);
+      }
+      draw();
+    };
+    $('story-set-all').onclick = () => setShown(1);
+    $('story-clear-all').onclick = () => setShown(0);
     $('story-show').onchange = e => {
       storyFilter.show = e.target.value;
       draw();
@@ -2137,14 +2178,40 @@
         return;
       }
       const plan = { flags: [...flagDraft], vars: [...varDraft] };
-      apply(
-        () => {
-          save.applyStory(plan, `Edit ${n} story value${n === 1 ? '' : 's'}`);
-          flagDraft.clear();
-          varDraft.clear();
-        },
-        `${n} story value${n === 1 ? '' : 's'} updated.`,
+      const commit = () =>
+        apply(
+          () => {
+            save.applyStory(plan, `Edit ${n} story value${n === 1 ? '' : 's'}`);
+            flagDraft.clear();
+            varDraft.clear();
+          },
+          `${n} story value${n === 1 ? '' : 's'} updated. Undo reverses all of them at once.`,
+        );
+      const name = id => storyFlagName.get(id) || '';
+      const hide = plan.flags.filter(([id]) => FLAG_GROUPS.hide[1](name(id))).length,
+        items = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.items[1](name(id))).length,
+        defeated = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.defeated[1](name(id))).length;
+      if (n <= 25 && !hide) {
+        commit();
+        return;
+      }
+      const risks = [
+        hide &&
+          `${hide} flag${hide === 1 ? ' changes' : 's change'} which characters and objects appear. Story characters can vanish or block paths, and some events may never trigger.`,
+        items &&
+          `${items} item${items === 1 ? '' : 's'} will count as already picked up, so those item balls and hidden items disappear without giving you anything.`,
+        defeated &&
+          `${defeated} trainer${defeated === 1 ? '' : 's'} or Pokémon will count as defeated, including legendaries you may not have caught yet.`,
+      ].filter(Boolean);
+      const dialog = openDialog(
+        `Change ${n} story values?`,
+        'Large flag changes can break a run. Keep the original backup before you play this save.',
+        `${risks.length ? `<ul class="story-risks">${risks.map(r => `<li>${html(r)}</li>`).join('')}</ul>` : ''}<p class="field-help">Undo reverses the whole change in one step.</p><div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Apply ${n} changes</button></div></div>`,
       );
+      dialog.querySelector('[data-confirm]').onclick = () => {
+        closeDialog(dialog);
+        commit();
+      };
     };
     draw();
   }
