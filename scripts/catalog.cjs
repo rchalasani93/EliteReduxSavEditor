@@ -152,7 +152,15 @@ for (const s of data.species) {
       .filter(e => /MEGA|PRIMAL/.test(data.evoKindT[e.kd]))
       .map(e => data.species[e.in]?.id)
       .filter(Boolean),
+    // Ordinary evolutions (level, gendered level): used to tell final stages apart.
+    evolves: unique(
+      s.evolutions
+        .filter(e => /^EVO_LEVEL/.test(data.evoKindT[e.kd]))
+        .map(e => data.species[e.in]?.id)
+        .filter(Boolean),
+    ),
   };
+  if (!catalog.species[s.id].evolves.length) delete catalog.species[s.id].evolves;
 }
 for (const m of data.moves) {
   catalog.moves[m.id] = {

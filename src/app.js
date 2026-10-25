@@ -1542,17 +1542,22 @@
       dex = save.pokedex(),
       cap = save.cap();
     const caughtCount = entries.filter(sp => dex.caught(sp.id)).length;
+    // Final stages: species with no ordinary evolution left (Eevee gives all eight
+    // Eeveelutions, Gloom both Vileplume and Bellossom). Imported profiles may lack the data.
+    const hasEvolutions = entries.some(sp => sp.evolves);
+    const isFinal = sp => !sp.evolves?.length;
+    const finalCount = entries.filter(isFinal).length;
     const maxNo = entries.length ? entries[entries.length - 1].id : 1;
     const dialog = openDialog(
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
-      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option></select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
       <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label></div>
       <p class="field-help" data-bulk-preview></p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
     const form = dialog.querySelector('form');
-    form.elements.source.value = source;
+    form.elements.source.value = source === 'final' && !hasEvolutions ? 'all' : source;
     let free = 0;
     for (let b = 0; b < 26; b++) free += save.box(b).filter(m => !m.species).length;
     const owned = new Set(
@@ -1567,7 +1572,8 @@
         sp =>
           sp.id >= Math.min(from, to) &&
           sp.id <= Math.max(from, to) &&
-          (form.elements.source.value === 'all' || dex.caught(sp.id)) &&
+          (form.elements.source.value === 'all' ||
+            (form.elements.source.value === 'final' ? isFinal(sp) : dex.caught(sp.id))) &&
           !(form.elements.skipOwned.checked && owned.has(sp.name)),
       );
     };

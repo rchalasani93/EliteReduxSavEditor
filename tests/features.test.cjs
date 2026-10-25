@@ -420,3 +420,23 @@ test('adding many Pokémon fills empty PC slots in one undo step and records the
   s.undo();
   assert.ok(s.bytes.every((b, i) => b === before[i]));
 });
+
+test('catalog marks ordinary evolutions so final stages can be picked', () => {
+  const by = name => Object.values(catalog.species).find(s => s.name === name);
+  const final = name => !by(name).evolves?.length;
+  for (const name of [
+    'Venusaur',
+    'Vileplume',
+    'Bellossom',
+    'Vaporeon',
+    'Sylveon',
+    'Kecleon',
+    'Shedinja',
+  ])
+    assert.ok(final(name), `${name} should be final`);
+  for (const name of ['Bulbasaur', 'Ivysaur', 'Gloom', 'Eevee', 'Wurmple', 'Silcoon'])
+    assert.ok(!final(name), `${name} should evolve`);
+  assert.equal(by('Eevee').evolves.length, 8);
+  // Mega Evolution is not an evolution stage.
+  assert.ok(!by('Venusaur').evolves);
+});
