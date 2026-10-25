@@ -249,6 +249,159 @@
       ...(stopped ? { cancelled: true } : {}),
     };
   }
+  // Species finder. Every species whose ability sources match (same three
+  // abilities and innates) rolls identically under key = step(species) ^ PID,
+  // so each distinct layout is searched once and the key translated per species.
+  function layoutKey(species) {
+    return `${species.abilities.join(',')}|${species.innates.join(',')}`;
+  }
+  function groupLayouts(speciesList) {
+    const groups = new Map();
+    for (const sp of speciesList) {
+      const key = layoutKey(sp);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(sp);
+    }
+    return [...groups.values()];
+  }
+  // Returns the first { key, slot } for which a layout yields every target
+  // (any order across the active ability and innates), or null when none exists.
+  function findLayoutKey(species, options, config, targets, banned, budget) {
+    const modulus = config.modulus,
+      wanted = new Map();
+    for (const t of targets) wanted.set(t, (wanted.get(t) || 0) + 1);
+    const want = [...wanted.entries()];
+    const innSources = species.innates.slice(0, 3);
+    const innVariable = innSources.map(s => !!options.innateRng && !banned[s]);
+    const slotSources = [0, 1, 2].map(k => species.abilities[k] || species.abilities[0] || 0);
+    const eligible = [];
+    for (let slot = 0; slot < 3; slot++) {
+      const src = slotSources[slot];
+      if (eligible.some(e => e.source === src)) continue; // identical rolls to an earlier slot
+      const abVariable = !!options.abilityRng && !banned[src];
+      const remaining = targets.slice();
+      const fixed = [
+        abVariable ? null : src,
+        ...innSources.map((s, i) => (innVariable[i] ? null : s)),
+      ];
+      for (const s of fixed) {
+        if (s === null) continue;
+        const at = remaining.indexOf(s);
+        if (at >= 0) remaining.splice(at, 1);
+      }
+      const variableCount = (abVariable ? 1 : 0) + innVariable.filter(Boolean).length;
+      if (remaining.some(t => banned[t]) || remaining.length > variableCount) continue;
+      if (!remaining.length) return { key: 0, slot, unconstrained: true };
+      eligible.push({ slot, source: src, variable: abVariable });
+    }
+    if (!eligible.length) return null;
+    // Each eligible slot still needs its first remaining target from some variable
+    // source, so scanning every (target, variable source) pair finds every match.
+    const anchorTargets = new Set();
+    for (const e of eligible) {
+      const remaining = targets.slice();
+      const fixed = [
+        e.variable ? null : e.source,
+        ...innSources.map((s, i) => (innVariable[i] ? null : s)),
+      ];
+      for (const s of fixed) {
+        if (s === null) continue;
+        const at = remaining.indexOf(s);
+        if (at >= 0) remaining.splice(at, 1);
+      }
+      e.anchor = remaining[0];
+      anchorTargets.add(remaining[0]);
+    }
+    const wantT = want.map(w => w[0]),
+      wantC = want.map(w => w[1]),
+      kinds = want.length,
+      innRng = !!options.innateRng,
+      abRng = !!options.abilityRng;
+    const roll = (src, q, enabled) => {
+      if (!enabled || banned[src]) return src;
+      let seed = (src ^ q) >>> 0;
+      for (let i = 0; i < 256; i++) {
+        seed = (Math.imul(A, seed) + C) >>> 0;
+        const v = ((seed >>> 16) % modulus) + 1;
+        if (!banned[v]) return v;
+      }
+      return -1;
+    };
+    const [i0, i1, i2] = innSources;
+    const test = q => {
+      const a = roll(i0, q, innRng),
+        b = roll(i1, q, innRng),
+        c = roll(i2, q, innRng);
+      let missing = 0,
+        missingTarget = -1;
+      for (let k = 0; k < kinds; k++) {
+        const t = wantT[k],
+          have = (a === t) + (b === t) + (c === t);
+        if (have < wantC[k]) {
+          missing += wantC[k] - have;
+          if (missing > 1) return -1;
+          missingTarget = t;
+        }
+      }
+      for (let k = 0; k < eligible.length; k++) {
+        const e = eligible[k];
+        if (missing === 0 || roll(e.source, q, abRng) === missingTarget) return e.slot;
+      }
+      return -1;
+    };
+    // Anchor positions: every variable source (innates and eligible abilities).
+    const anchorSources = new Set();
+    innSources.forEach((s, i) => innVariable[i] && anchorSources.add(s));
+    eligible.forEach(e => e.variable && anchorSources.add(e.source));
+    for (const target of anchorTargets) {
+      for (const source of anchorSources) {
+        for (let high = target - 1; high < 65536; high += modulus) {
+          for (let low = 0; low < 65536; low++) {
+            let pred = inverse(((high << 16) | low) >>> 0);
+            for (let chain = 0; chain < 256; chain++) {
+              const q = (pred ^ source) >>> 0,
+                slot = test(q);
+              if (slot >= 0) return { key: q, slot };
+              if (!banned[((pred >>> 16) % modulus) + 1]) break;
+              pred = inverse(pred);
+            }
+          }
+          budget.chunks++;
+        }
+      }
+    }
+    return null;
+  }
+  // Yields { done, total, found: [{ species, pid, slot, ability, innates }] } per layout.
+  async function* findSpecies(request, cancelled = () => false) {
+    const { speciesList, options, config, targets } = request;
+    if (!Array.isArray(targets) || !targets.length || targets.length > 4)
+      throw new Error('Choose one to four abilities.');
+    if (targets.some(t => !Number.isInteger(t) || t < 1 || t > config.modulus))
+      throw new Error('Unknown ability.');
+    const banned = new Uint8Array(config.modulus + 2);
+    for (const id of config.banned) banned[id] = 1;
+    const groups = request.groups || groupLayouts(speciesList);
+    const budget = { chunks: 0 };
+    let done = 0;
+    for (const group of groups) {
+      if (cancelled()) return;
+      const hit = findLayoutKey(group[0], options, config, targets, banned, budget);
+      const found = [];
+      if (hit)
+        for (const sp of group) {
+          const pid = hit.unconstrained ? (request.pid ?? 0) >>> 0 : (hit.key ^ step(sp.id)) >>> 0;
+          const r = evaluate(sp, pid, hit.slot, options, config);
+          const values = [r.ability, ...r.innates];
+          const ok = targets.every(
+            t => values.filter(v => v === t).length >= targets.filter(x => x === t).length,
+          );
+          if (ok) found.push({ species: sp.id, pid, slot: hit.slot, ...r });
+        }
+      done++;
+      yield { done, total: groups.length, found };
+    }
+  }
   async function search(request, progress = () => {}, cancelled = () => false) {
     const pages = searchPages(request, progress, cancelled);
     try {
@@ -257,5 +410,17 @@
       await pages.return();
     }
   }
-  return { step, inverse, randomize, type, evaluate, gender, search, searchPages };
+  return {
+    step,
+    inverse,
+    randomize,
+    type,
+    evaluate,
+    gender,
+    search,
+    searchPages,
+    layoutKey,
+    groupLayouts,
+    findSpecies,
+  };
 });

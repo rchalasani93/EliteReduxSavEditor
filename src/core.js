@@ -347,6 +347,53 @@
       return n;
     });
   }
+  // Guess which bundled ROM build a save comes from. Saves don't record it, so
+  // weigh hard evidence first: a move or species ID that exists in only some
+  // builds, then a version written in the file name, then party stats cached by
+  // the game, which follow that build's base stats.
+  function detectVersion(save, versions, filename = '', aliases = {}) {
+    const names = Object.keys(versions);
+    const mons = [...save.party()];
+    for (let b = 0; b < 26; b++) for (const m of save.box(b)) if (m.species) mons.push(m);
+    let candidates = names.filter(v =>
+      mons.every(
+        m => versions[v].species[m.species] && m.moves.every(id => !id || versions[v].moves[id]),
+      ),
+    );
+    if (candidates.length === 1 && names.length > 1)
+      return { version: candidates[0], reason: 'moves' };
+    if (!candidates.length) candidates = names;
+    const normalized = String(filename)
+      .toLowerCase()
+      .replace(/[_\- ]+/g, '.');
+    const spelled = [...names, ...Object.keys(aliases)].sort((a, b) => b.length - a.length);
+    for (const name of spelled) {
+      const at = normalized.indexOf(name.toLowerCase());
+      if (at < 0) continue;
+      const after = normalized[at + name.length];
+      if (after !== undefined && /[0-9a-z]/.test(after)) continue; // 2.65.4 inside 2.65.4.11b
+      const version = aliases[name] || name;
+      if (candidates.includes(version)) return { version, reason: 'filename' };
+    }
+    const party = save.party().filter(m => m.species && m.stats);
+    if (party.length) {
+      const opts = save.options(),
+        zeroIV = opts.difficulty === 3 && save.flag(2893);
+      const fits = candidates.filter(v =>
+        party.every(m => {
+          const sp = versions[v].species[m.species];
+          return (
+            sp &&
+            calcStats({ ...m, level: m.cachedLevel }, sp, opts, zeroIV).every(
+              (n, i) => i === 0 || n === m.stats[i],
+            )
+          );
+        }),
+      );
+      if (fits.length === 1 && candidates.length > 1) return { version: fits[0], reason: 'stats' };
+    }
+    return null;
+  }
   function randomU32() {
     const c = globalThis.crypto;
     if (c?.getRandomValues) return c.getRandomValues(new Uint32Array(1))[0];
@@ -1579,6 +1626,7 @@
     decode,
     encode,
     calcStats,
+    detectVersion,
     expForLevel,
     levelForExp,
     maxPP,
