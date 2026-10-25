@@ -198,7 +198,8 @@
           name = document.createElement('b'),
           detail = document.createElement('small');
         name.textContent = entry.value.name;
-        detail.textContent = `#${entry.value.id}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
+        const no = entry.value.key && ERCore.dexNumber(catalog, entry.value.id);
+        detail.textContent = `#${entry.value.id}${no && no !== entry.value.id ? ` · Pokédex #${no}` : ''}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
         text.append(name, detail);
         button.append(text);
         button.onclick = () => {
@@ -1615,12 +1616,24 @@
     const isFinal = sp => !sp.evolves?.length;
     const finalCount = entries.filter(isFinal).length;
     const maxNo = entries.length ? entries[entries.length - 1].no : 1;
+    // Forms have no Pokédex entry of their own (Primal Cascoon is Cascoon's #268), so they
+    // are listed apart: Redux, regional and other variants, and battle forms.
+    const shownIds = new Set(entries.map(sp => sp.id)),
+      battleForm = sp => /_(MEGA|PRIMAL)(_|$)/.test(sp.key),
+      forms = Object.values(catalog.species)
+        .filter(sp => sp.id > 0 && !shownIds.has(sp.id))
+        .map(sp => ({ ...sp, no: ERCore.dexNumber(catalog, sp.id), form: true }))
+        .filter(sp => sp.no > 0)
+        .sort((a, b) => a.no - b.no || a.id - b.id),
+      variants = forms.filter(sp => !battleForm(sp)),
+      battleForms = forms.filter(battleForm),
+      everything = [...entries, ...forms].sort((a, b) => a.no - b.no || a.id - b.id);
     const dialog = openDialog(
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
-      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
       <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label><label><input type="checkbox" name="recordDex" checked> Record them in the Pokédex (up to the 999 seen the game can show)</label></div>
-      <p class="field-help" data-bulk-preview></p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
+      <p class="field-help" data-bulk-preview></p><p class="field-help" data-bulk-battle hidden>Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form; the game may not expect it everywhere, so test before relying on them.</p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
     const form = dialog.querySelector('form');
@@ -1632,24 +1645,33 @@
         .allMons()
         .map(m => ERCore.baseSpeciesName(catalog, catalog.species[m.species] || {}) || m.species),
     );
+    const ownedIds = new Set(save.allMons().map(m => m.species));
+    const pool = source =>
+      ({ variants, battle: battleForms, everything })[source] ||
+      entries.filter(sp =>
+        source === 'all' ? true : source === 'final' ? isFinal(sp) : dex.caught(sp.no),
+      );
     const chosen = () => {
       const from = +form.elements.from.value || 1,
         to = +form.elements.to.value || maxNo;
-      return entries.filter(
+      return pool(form.elements.source.value).filter(
         sp =>
           sp.no >= Math.min(from, to) &&
           sp.no <= Math.max(from, to) &&
-          (form.elements.source.value === 'all' ||
-            (form.elements.source.value === 'final' ? isFinal(sp) : dex.caught(sp.no))) &&
-          !(form.elements.skipOwned.checked && owned.has(sp.name)),
+          !(
+            form.elements.skipOwned.checked && (sp.form ? ownedIds.has(sp.id) : owned.has(sp.name))
+          ),
       );
     };
     const seenNow = dex.counts().seen;
     const dexNote = adds => {
       if (!form.elements.recordDex.checked) return ' The Pokédex is left as it is.';
-      const unseen = chosen()
-        .slice(0, adds)
-        .filter(sp => !dex.seen(sp.no)).length;
+      const unseen = new Set(
+        chosen()
+          .slice(0, adds)
+          .filter(sp => !dex.seen(sp.no))
+          .map(sp => sp.no),
+      ).size;
       const room = Math.max(0, dex.limit - seenNow);
       return unseen > room
         ? ` Only ${room} more fit in the Pokédex (${dex.limit} seen is the most the game can show), so ${unseen - room} won't be recorded there.`
@@ -1658,6 +1680,9 @@
           : '';
     };
     const preview = () => {
+      dialog.querySelector('[data-bulk-battle]').hidden = !['battle', 'everything'].includes(
+        form.elements.source.value,
+      );
       const n = chosen().length,
         adds = Math.min(n, free);
       dialog.querySelector('[data-bulk-preview]').textContent = n
