@@ -1352,6 +1352,27 @@
       return copy;
     }
   }
+  // ---- Game versions --------------------------------------------------------------------------
+  // A newer build is bundled as a patch over the base catalog: changed entries replace the base ones
+  // and null removes an entry. The randomizer modulus comes from the patch, so every PID result
+  // follows the build the player chose.
+  function applyCatalogPatch(base, patch) {
+    const out = {
+      ...base,
+      version: patch.version,
+      creationDate: patch.creationDate,
+      config: patch.config,
+    };
+    if (patch.natures) out.natures = patch.natures;
+    for (const table of ['species', 'moves', 'abilities', 'items']) {
+      out[table] = { ...base[table] };
+      for (const [id, entry] of Object.entries(patch[table] || {})) {
+        if (entry === null) delete out[table][id];
+        else out[table][id] = entry;
+      }
+    }
+    return out;
+  }
   // ---- Showdown / Smogon text sets ---------------------------------------------------------------
   const SHOWDOWN_STATS = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
   const normalize = t =>
@@ -1542,6 +1563,7 @@
   }
   return {
     Save,
+    applyCatalogPatch,
     demo,
     randomInt,
     GAME_STATS_EDITABLE,

@@ -362,3 +362,38 @@ test('random natures and Hidden Power types stay in range and cover every value'
     assert.ok(r.hpType < 19 && r.hpType !== 9);
   }
 });
+test('2.65.4.11b data changes the randomizer modulus and its results', () => {
+  const patches = require('../src/catalog-patches.json');
+  const rng = require('../src/rng.js');
+  const latest = core.applyCatalogPatch(catalog, patches['2.65.4.11b']);
+  assert.equal(catalog.config.modulus, 1062);
+  assert.equal(latest.config.modulus, 1073);
+  assert.equal(latest.abilities[1073].name, 'Chlorophyllo');
+  assert.equal(catalog.abilities[1073], undefined, 'patching must not change the base catalog');
+  // Iron Moth at PID 7AE9A256 from a 2.65.4.11b save, ability and innate randomizers on.
+  const options = { abilityRng: 1, innateRng: 1, typeRng: 0 };
+  const names = (data, species) => {
+    const r = [0, 1, 2].map(slot => rng.evaluate(species, 0x7ae9a256, slot, options, data.config));
+    return [
+      ...r.map(x => data.abilities[x.ability].name),
+      ...r[0].innates.map(id => data.abilities[id].name),
+    ];
+  };
+  const id = Object.values(catalog.species).find(s => s.name === 'Iron Moth').id;
+  assert.deepEqual(names(catalog, catalog.species[id]), [
+    'Prismatic Fur',
+    'Hypnotist',
+    'Magician',
+    'Pure Power',
+    'Dual Wield',
+    'Grim Neigh',
+  ]);
+  assert.deepEqual(names(latest, latest.species[id]), [
+    'Rampage',
+    'Dreamcatcher',
+    'Depth Explorer',
+    'Marvel Scale',
+    'Swift Swim',
+    'Daredevil',
+  ]);
+});
