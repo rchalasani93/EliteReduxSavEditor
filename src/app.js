@@ -70,6 +70,8 @@
     pickerEntries = [],
     catalogEntries = {},
     catalogControlId = 0;
+  // Every word of the query must appear, in any order: "primal cascoon" finds Cascoon Primal.
+  const matchesQuery = (text, query) => query.split(/\s+/).every(word => text.includes(word));
   const touchLayout = () => window.matchMedia('(max-width: 760px), (any-pointer: coarse)').matches;
   const catalogLabel = kind =>
     ({ species: 'species', moves: 'move', abilities: 'ability', items: 'item' })[kind] || kind;
@@ -215,7 +217,7 @@
     };
     const draw = () => {
       const query = filter.value.trim().toLocaleLowerCase();
-      matches = query ? entries.filter(entry => entry.search.includes(query)) : entries;
+      matches = query ? entries.filter(entry => matchesQuery(entry.search, query)) : entries;
       shown = 0;
       list.replaceChildren();
       dialog.querySelector('.picker-body').scrollTop = 0;
@@ -505,7 +507,7 @@
       const draw = () => {
         if (!dialog.hasAttribute('open')) return;
         const query = filter.value.trim().toLocaleLowerCase();
-        matches = query ? pickerEntries.filter(a => a.search.includes(query)) : pickerEntries;
+        matches = query ? pickerEntries.filter(a => matchesQuery(a.search, query)) : pickerEntries;
         shown = 0;
         list.replaceChildren();
         list.scrollTop = 0;
@@ -1617,7 +1619,7 @@
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
       `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
-      <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label></div>
+      <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label><label><input type="checkbox" name="recordDex" checked> Record them in the Pokédex (up to the 999 seen the game can show)</label></div>
       <p class="field-help" data-bulk-preview></p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
@@ -1642,11 +1644,24 @@
           !(form.elements.skipOwned.checked && owned.has(sp.name)),
       );
     };
+    const seenNow = dex.counts().seen;
+    const dexNote = adds => {
+      if (!form.elements.recordDex.checked) return ' The Pokédex is left as it is.';
+      const unseen = chosen()
+        .slice(0, adds)
+        .filter(sp => !dex.seen(sp.no)).length;
+      const room = Math.max(0, dex.limit - seenNow);
+      return unseen > room
+        ? ` Only ${room} more fit in the Pokédex (${dex.limit} seen is the most the game can show), so ${unseen - room} won't be recorded there.`
+        : unseen
+          ? ` Pokédex: ${seenNow + unseen} seen afterwards.`
+          : '';
+    };
     const preview = () => {
       const n = chosen().length,
         adds = Math.min(n, free);
       dialog.querySelector('[data-bulk-preview]').textContent = n
-        ? `${n} species selected · ${free} empty PC slot${free === 1 ? '' : 's'} · adds ${adds}${n > free ? ` (the first ${adds} by Pokédex number; the rest don't fit)` : ''}.`
+        ? `${n} species selected · ${free} empty PC slot${free === 1 ? '' : 's'} · adds ${adds}${n > free ? ` (the first ${adds} by Pokédex number; the rest don't fit)` : ''}.${dexNote(adds)}`
         : 'No species match. Mark species caught in the Pokédex (Progress tab), choose Every species, or widen the number range.';
       dialog.querySelector('[data-confirm]').disabled = !adds;
     };
@@ -1670,7 +1685,7 @@
         applyStructural(() => {
           added = save.createMany(
             list,
-            { startBox: +form.elements.box.value },
+            { startBox: +form.elements.box.value, recordDex: form.elements.recordDex.checked },
             `Add ${list.length} Pokémon to the PC`,
           );
           return { kind: 'box', box: +form.elements.box.value, slot: 0 };
@@ -2477,7 +2492,7 @@
       const q = dexFilter.text.trim().toLocaleLowerCase();
       return entries.filter(
         sp =>
-          (!q || `${sp.name} ${sp.no}`.toLocaleLowerCase().includes(q)) &&
+          (!q || matchesQuery(`${sp.name} ${sp.no}`.toLocaleLowerCase(), q)) &&
           (dexFilter.show === 'all' || stateOf(sp.no) === dexFilter.show),
       );
     };

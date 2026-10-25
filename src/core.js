@@ -1479,7 +1479,7 @@
     }
     // Adds many Pokémon to the first empty PC slots from startBox on, as one undoable edit,
     // and records them as caught. Stops when the PC is full; returns how many were added.
-    createMany(list, { startBox = 0 } = {}, label = 'Add Pokémon to the PC') {
+    createMany(list, { startBox = 0, recordDex = true } = {}, label = 'Add Pokémon to the PC') {
       let placed = 0;
       this.transact(label, () => {
         const dex = [],
@@ -1497,7 +1497,7 @@
           dex.push(dexNumber(this.catalog, options.species));
           placed++;
         }
-        this.lastPokedexSkipped = this.catchInPokedex(dex);
+        this.lastPokedexSkipped = recordDex ? this.catchInPokedex(dex) : [];
       });
       return placed;
     }

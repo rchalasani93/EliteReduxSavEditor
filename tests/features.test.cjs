@@ -497,3 +497,14 @@ test('Pokédex stays within the 999 seen the game can draw', () => {
   assert.equal(u.pokedex().counts().seen, 998);
   assert.deepEqual(u.trimPokedex(), []);
 });
+
+test('Add many can leave the Pokédex untouched', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.pokedex().counts();
+  const list = core
+    .pokedexList(catalog)
+    .slice(0, 40)
+    .map(e => ({ species: e.species.id, level: 5, moves: [1] }));
+  assert.equal(s.createMany(list, { recordDex: false }), 40);
+  assert.deepEqual(s.pokedex().counts(), before);
+});
