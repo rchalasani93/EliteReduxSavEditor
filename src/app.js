@@ -1535,6 +1535,81 @@
       }
     };
   }
+  // Fills empty PC slots with one Pokémon of each chosen species, as one undoable edit.
+  function openBulkAddDialog(source = 'caught') {
+    if (!guard(() => openBulkAddDialog(source))) return;
+    const entries = dexEntries(),
+      dex = save.pokedex(),
+      cap = save.cap();
+    const caughtCount = entries.filter(sp => dex.caught(sp.id)).length;
+    const maxNo = entries.length ? entries[entries.length - 1].id : 1;
+    const dialog = openDialog(
+      'Add many Pokémon',
+      'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option></select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label></div>
+      <p class="field-help" data-bulk-preview></p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
+      <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
+    );
+    const form = dialog.querySelector('form');
+    form.elements.source.value = source;
+    let free = 0;
+    for (let b = 0; b < 26; b++) free += save.box(b).filter(m => !m.species).length;
+    const owned = new Set(
+      save
+        .allMons()
+        .map(m => ERCore.baseSpeciesName(catalog, catalog.species[m.species] || {}) || m.species),
+    );
+    const chosen = () => {
+      const from = +form.elements.from.value || 1,
+        to = +form.elements.to.value || maxNo;
+      return entries.filter(
+        sp =>
+          sp.id >= Math.min(from, to) &&
+          sp.id <= Math.max(from, to) &&
+          (form.elements.source.value === 'all' || dex.caught(sp.id)) &&
+          !(form.elements.skipOwned.checked && owned.has(sp.name)),
+      );
+    };
+    const preview = () => {
+      const n = chosen().length,
+        adds = Math.min(n, free);
+      dialog.querySelector('[data-bulk-preview]').textContent = n
+        ? `${n} species selected · ${free} empty PC slot${free === 1 ? '' : 's'} · adds ${adds}${n > free ? ` (the first ${adds} by Pokédex number; the rest don't fit)` : ''}.`
+        : 'No species match. Mark species caught in the Pokédex (Progress tab), choose Every species, or widen the number range.';
+      dialog.querySelector('[data-confirm]').disabled = !adds;
+    };
+    form.addEventListener('input', preview);
+    form.addEventListener('change', preview);
+    preview();
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      try {
+        const level = wholeNumber(form.elements.level.value, 'Level', 1, 100),
+          nature = form.elements.nature.value,
+          list = chosen()
+            .slice(0, free)
+            .map(sp => ({
+              species: sp.id,
+              level,
+              moves: suggestedMoves(sp),
+              ...(nature === 'random' ? {} : { nature: +nature }),
+            }));
+        closeDialog(dialog);
+        let added = 0;
+        applyStructural(() => {
+          added = save.createMany(
+            list,
+            { startBox: +form.elements.box.value },
+            `Add ${list.length} Pokémon to the PC`,
+          );
+          return { kind: 'box', box: +form.elements.box.value, slot: 0 };
+        }, `${list.length} Pokémon added to your PC. Undo removes them all.`);
+        if (added && added < list.length) notify(`${added} added; the PC is full.`, true);
+      } catch (e) {
+        fail(e);
+      }
+    };
+  }
   function importSet(dialog, target) {
     const set = ERCore.parseShowdown(
         dialog.querySelector('[data-pane="import"] textarea').value,
@@ -1591,8 +1666,9 @@
   function drawRosterActions() {
     const off = !!save.damaged.length;
     $('roster-actions').innerHTML =
-      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
+      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button><button type="button" id="add-many" ${off ? 'disabled' : ''}>Add many…</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
     $('add-mon').onclick = () => openAddDialog();
+    $('add-many').onclick = () => openBulkAddDialog();
     $('heal-party')?.addEventListener('click', () => {
       if (guard()) apply(() => save.healParty(), 'Party healed: full HP, PP and no status.');
     });
@@ -2295,7 +2371,7 @@
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
     <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per species. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
     <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label><label class="field"><span>Show</span><select id="dex-show"><option value="all">All species</option><option value="caught">Caught</option><option value="seen">Seen, not caught</option><option value="none">Not seen</option></select></label><span></span></div>
-    <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button></div>
+    <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
     <form id="stats-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>GAME STATS</h2><span>Shown on the trainer card and in TV shows</span></div><div class="field-grid">${Object.entries(
       ERCore.GAME_STATS_EDITABLE,
@@ -2386,6 +2462,7 @@
           draw();
         }),
     );
+    $('dex-add-pc').onclick = () => openBulkAddDialog('caught');
     $('dex-discard').onclick = () => {
       dexDraft.clear();
       dirty = false;

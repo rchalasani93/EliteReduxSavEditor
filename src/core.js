@@ -1372,6 +1372,32 @@
       });
       return placed;
     }
+    // Adds many Pokémon to the first empty PC slots from startBox on, as one undoable edit,
+    // and records them as caught. Stops when the PC is full; returns how many were added.
+    createMany(list, { startBox = 0 } = {}, label = 'Add Pokémon to the PC') {
+      let placed = 0;
+      this.transact(label, () => {
+        const dex = {},
+          free = [];
+        for (let i = 0; i < 26; i++) {
+          const box = (startBox + i) % 26;
+          for (let slot = 0; slot < 30; slot++)
+            if (!this.mon({ kind: 'box', box, slot }).species)
+              free.push({ kind: 'box', box, slot });
+        }
+        for (const options of list) {
+          const target = free.shift();
+          if (!target) break;
+          this.placeRecord(target, this.newRecord(options));
+          dex[options.species] = 'caught';
+          placed++;
+        }
+        const max = DEX_BYTES * 8;
+        const caught = Object.fromEntries(Object.entries(dex).filter(([id]) => +id <= max));
+        if (Object.keys(caught).length) this.editPokedex(caught);
+      });
+      return placed;
+    }
     deleteMon(ref) {
       this.transact(`Release ${this.mon(ref).nickname || 'Pokémon'}`, () => {
         if (!this.occupied(ref)) throw new Error('That slot is empty.');

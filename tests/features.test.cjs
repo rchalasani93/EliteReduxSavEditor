@@ -397,3 +397,26 @@ test('2.65.4.11b data changes the randomizer modulus and its results', () => {
     'Daredevil',
   ]);
 });
+
+test('adding many Pokémon fills empty PC slots in one undo step and records them as caught', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.bytes.slice();
+  const species = Object.values(catalog.species)
+    .filter(sp => sp.id >= 1 && sp.id <= 1504 && core.baseSpeciesName(catalog, sp) === sp.name)
+    .slice(0, 900);
+  const free = Array.from({ length: 26 }, (_, b) => s.box(b).filter(m => !m.species).length).reduce(
+    (a, n) => a + n,
+  );
+  const added = s.createMany(
+    species.map(sp => ({ species: sp.id, level: 20, moves: [1] })),
+    { startBox: 3 },
+  );
+  assert.equal(added, Math.min(free, species.length));
+  assert.equal(s.history.length, 1);
+  assert.ok(s.box(3)[0].species, 'starts in the chosen box');
+  const reopened = new core.Save(s.export(), catalog);
+  for (const m of reopened.allMons()) reopened.assertMon(m);
+  assert.ok(reopened.pokedex().caught(species[0].id));
+  s.undo();
+  assert.ok(s.bytes.every((b, i) => b === before[i]));
+});
