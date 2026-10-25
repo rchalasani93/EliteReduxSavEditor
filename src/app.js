@@ -252,12 +252,42 @@
     $('toast').hidden = false;
     toastTimer = setTimeout(() => ($('toast').hidden = true), error ? 8500 : 4000);
   }
-  function guard() {
-    if (dirty) {
-      notify('Apply or discard your pending changes before switching views or exporting.', true);
-      return false;
-    }
-    return true;
+  // Unapplied edits block navigation. With a retry callback, ask whether to apply or
+  // discard them and then carry on; without one, just say so.
+  function guard(retry) {
+    if (!dirty) return true;
+    if (retry) askAboutPending(retry);
+    else notify('Apply or discard your pending changes first.', true);
+    return false;
+  }
+  function askAboutPending(retry) {
+    if (document.querySelector('dialog.pending-dialog')) return;
+    const dialog = openDialog(
+      'You have unapplied changes',
+      'Changes on this page only reach your save when you apply them.',
+      `<div class="form-footer pending-choices"><span></span><div class="actions-inline"><button type="button" data-close>Keep editing</button><button type="button" data-pending="discard">Discard changes</button><button type="button" class="primary" data-pending="apply">Apply changes</button></div></div>`,
+    );
+    dialog.classList.add('pending-dialog');
+    dialog.querySelector('[data-pending="discard"]').onclick = () => {
+      closeDialog(dialog);
+      discardPending();
+      retry();
+    };
+    dialog.querySelector('[data-pending="apply"]').onclick = () => {
+      closeDialog(dialog);
+      const form = document.querySelector('#editor-panel form.is-dirty');
+      if (form) form.requestSubmit();
+      else document.querySelector('#editor-panel .is-dirty [data-dirty-apply]')?.click();
+      // Invalid input keeps the changes pending; the error is already shown.
+      if (!dirty) retry();
+    };
+  }
+  function discardPending() {
+    bagDraft.clear();
+    dexDraft.clear();
+    dirty = false;
+    render();
+    sync();
   }
   function fail(error) {
     notify(error.message || String(error), true);
@@ -487,16 +517,18 @@
   }
   function heading(m, species = catalog.species[m.species]) {
     const r = ERRng.evaluate(species, m.pid, m.abilitySlot, options(), catalog.config);
-    return `<div class="mon-heading"><div class="mon-identity">${pokemonIcon(species)}<div><h1>${html(m.nickname || species.name)} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</h1><p>${html(species.name)} · Lv. ${m.level} · ${ERRng.gender(catalog.species[m.species], m.pid)} · ${ref.kind === 'party' ? `Party slot ${ref.slot + 1}` : `${html(save.boxName(ref.box))}, slot ${ref.slot + 1}`}</p><div class="types">${typeTags(r.types)}</div></div></div><span class="pill">${html(catalog.natures[m.nature])} nature</span></div>`;
+    return `<div class="mon-heading"><div class="mon-identity">${pokemonIcon(species)}<div><h1>${html(m.nickname || species.name)} ${m.shiny ? '<span class="shiny-tag">Shiny</span>' : ''}</h1><p>${m.nickname && m.nickname !== species.name ? `${html(species.name)} · ` : ''}Lv. ${m.level} · ${ERRng.gender(catalog.species[m.species], m.pid)} · ${ref.kind === 'party' ? `Party slot ${ref.slot + 1}` : `${html(save.boxName(ref.box))}, slot ${ref.slot + 1}`}</p><div class="types">${typeTags(r.types)}</div></div></div><span class="pill">${html(catalog.natures[m.nature])} nature</span></div>`;
   }
   function sync() {
     $('undo-button').disabled = !save.undoStack.length || dirty;
     $('redo-button').disabled = !save.redoStack.length || dirty;
-    $('export-button').disabled = !!save.damaged.length || dirty;
-    $('export-button').innerHTML =
-      `Export .${filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav'} `;
+    $('export-button').disabled = !!save.damaged.length;
+    const edits = save.history.length;
+    $('export-button').textContent =
+      `Export .${filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav'}${edits ? ` · ${edits} change${edits === 1 ? '' : 's'}` : ''}`;
     const n = save.changedBytes();
-    $('change-count').textContent = save.history.length;
+    $('change-count').textContent = edits;
+    $('change-count').classList.toggle('has-changes', edits > 0);
     const t = save.trainer();
     $('save-meta').textContent =
       `Trainer ${t.name} · ${t.hours}h ${String(t.minutes).padStart(2, '0')}m · 128 KB · ${dirty ? 'Pending changes' : n ? `${n} bytes changed` : 'Original loaded'}`;
@@ -518,8 +550,19 @@
       ? `Party slot ${r.slot + 1}`
       : `${save.boxName(r.box)}, slot ${r.slot + 1}`;
   }
+  // On phones the roster folds into one button showing the selected Pokémon.
+  let rosterOpen = false;
+  function drawRosterToggle() {
+    const m = mon(),
+      sp = m?.species ? catalog.species[m.species] : null;
+    $('roster-toggle').innerHTML =
+      `<span>${sp ? `${html(m.nickname || sp.name)} <small>${html(locationLabel(ref))}</small>` : 'Choose a Pokémon'}</span><b>${rosterOpen ? 'Hide roster' : 'Change Pokémon'}</b>`;
+    $('roster-toggle').setAttribute('aria-expanded', String(rosterOpen));
+    document.querySelector('.roster').classList.toggle('is-open', rosterOpen);
+  }
   function drawRoster() {
     drawRosterActions();
+    drawRosterToggle();
     document
       .querySelectorAll('[data-roster]')
       .forEach(e => e.classList.toggle('active', e.dataset.roster === roster));
@@ -570,7 +613,7 @@
       .forEach(
         e =>
           (e.onclick = () => {
-            if (!guard()) return;
+            if (!guard(() => e.click())) return;
             resetSearch();
             ref =
               e.dataset.kind === 'party'
@@ -583,25 +626,27 @@
               $('box-select').value = String(box);
             }
             searchResults = [];
+            rosterOpen = false;
             drawRoster();
             render();
           }),
       );
   }
   function bindDirty(form) {
-    form.addEventListener('input', () => {
+    const mark = () => {
       dirty = true;
+      form.classList.add('is-dirty');
       sync();
-    });
-    form.addEventListener('change', () => {
-      dirty = true;
-      sync();
-    });
-    form.querySelector('[data-discard]')?.addEventListener('click', () => {
-      dirty = false;
-      render();
-      sync();
-    });
+    };
+    form.addEventListener('input', mark);
+    form.addEventListener('change', mark);
+    form.querySelectorAll('[data-discard]').forEach(b =>
+      b.addEventListener('click', () => {
+        dirty = false;
+        render();
+        sync();
+      }),
+    );
   }
   function apply(fn, message, { keepSearch = false } = {}) {
     try {
@@ -921,6 +966,16 @@
     const text = [move.longDescription, move.description].filter(Boolean);
     return `<dl class="move-facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>${flags}${text.map(t => `<p class="move-text">${html(t)}</p>`).join('')}${move.accuracy === undefined ? '<p class="field-help">Accuracy, priority and target are not in this game data profile.</p>' : ''}`;
   }
+  function bindJumpLinks() {
+    document.querySelectorAll('[data-jump]').forEach(
+      b =>
+        (b.onclick = () => {
+          const target = $(b.dataset.jump);
+          if (target.tagName === 'DETAILS') target.open = true;
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }),
+    );
+  }
   function heldItemText(id) {
     const item = catalog.items[id];
     if (!id || !item) return 'Not holding an item.';
@@ -930,8 +985,8 @@
     const s = catalog.species[m.species],
       stats = ERCore.calcStats(m, s, options(), options().difficulty === 3 && save.flag(2893));
     $('editor-panel').innerHTML =
-      `${heading(m)}${monActions()}<div class="ability-overview" id="pokemon-abilities">${abilityCards(m)}</div><form id="pokemon-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="border:0;padding:0;margin:0">
-    <section class="panel"><div class="panel-heading"><h2>IDENTITY & DETAILS</h2><span>PID ${m.pid.toString(16).toUpperCase().padStart(8, '0')}</span></div><div class="field-grid">
+      `${heading(m)}${monActions()}<nav class="jump-links" aria-label="Jump to a section"><button type="button" data-jump="pokemon-abilities">Abilities</button><button type="button" data-jump="identity-panel">Details</button><button type="button" data-jump="stats-panel">Stats & EVs</button><button type="button" data-jump="moves-panel">Moves</button><button type="button" data-jump="more-details">More details</button></nav><div class="ability-overview" id="pokemon-abilities">${abilityCards(m)}</div><form id="pokemon-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="border:0;padding:0;margin:0">
+    <section class="panel" id="identity-panel"><div class="panel-heading"><h2>IDENTITY & DETAILS</h2><span>PID ${m.pid.toString(16).toUpperCase().padStart(8, '0')}</span></div><div class="field-grid">
     ${catalogField('Species', 'species', 'species', m.species)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" value="${html(m.nickname)}" maxlength="12" required></label>${numberField(`Level · current cap ${save.cap()}`, 'level', m.level, 1, 100)}
     ${selectField('Nature', 'nature', m.nature, catalog.natures)}${catalogField('Held item', 'heldItem', 'items', m.heldItem)}${selectField(
       'Equipped ability',
@@ -942,11 +997,10 @@
       ),
     )}
     ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}${selectField('Shininess', 'shiny', m.shiny, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}
-    ${selectField('Hidden Power type', 'hpType', m.hpType, [...catalog.types, 'None'])}${numberField('Met level', 'metLevel', m.metLevel, 0, 100)}
-    </div><div class="checkrow"><label><input name="egg" type="checkbox" ${m.egg ? 'checked' : ''}> Egg</label><label><input name="speedDown" type="checkbox" ${m.speedDown ? 'checked' : ''}> Zero Speed IV</label></div><p class="field-help" id="held-item-desc">${heldItemText(m.heldItem)}</p><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
-    ${originPanel(m)}${ref.kind === 'party' ? conditionPanel(m) : ''}
-    <div class="two-columns"><section class="panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label, i) => `<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100, s.base[i] / 2.55)}%"></i></div></td><td>${(options().difficulty === 3 && save.flag(2893)) || (i === 5 && m.speedDown) ? 0 : 31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a, b) => a + b, 0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs ? 'enabled' : 'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind === 'party' ? `HP ${m.hp}/${m.stats[0]}.` : 'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
-    <section class="panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind === 'party' ? 'MOVE / CURRENT PP' : 'MOVE'}</span></div><div class="moves-list">${m.moves
+    </div><p class="field-help" id="held-item-desc">${heldItemText(m.heldItem)}</p><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
+    ${ref.kind === 'party' ? conditionPanel(m) : ''}
+    <div class="two-columns"><section class="panel" id="stats-panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label, i) => `<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100, s.base[i] / 2.55)}%"></i></div></td><td>${(options().difficulty === 3 && save.flag(2893)) || (i === 5 && m.speedDown) ? 0 : 31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a, b) => a + b, 0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs ? 'enabled' : 'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind === 'party' ? `HP ${m.hp}/${m.stats[0]}.` : 'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
+    <section class="panel" id="moves-panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind === 'party' ? 'MOVE / CURRENT PP' : 'MOVE'}</span></div><div class="moves-list">${m.moves
       .map((id, i) => {
         const move = catalog.moves[id];
         return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span><button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
@@ -954,11 +1008,14 @@
       .join(
         '',
       )}</div><div class="form-footer"><p>All ${Object.keys(catalog.moves).length} moves, including IDs above 999.</p>${ref.kind === 'party' ? '<button type="button" id="max-pp">Restore PP</button>' : ''}</div></section></div>
-    <div class="panel form-footer"><p id="pending-note">Apply commits the whole Pokémon form. Ctrl+Z undoes it.</p><div class="actions-inline">${ref.kind === 'party' ? '<button type="button" id="heal-button">Heal Pokémon</button>' : ''}<button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply Pokémon changes</button></div></div>
+    ${originPanel(m)}
+    <div class="panel form-footer apply-bar"><p id="pending-note">Apply commits the whole Pokémon form. Ctrl+Z undoes it.</p><div class="actions-inline">${ref.kind === 'party' ? '<button type="button" id="heal-button">Heal Pokémon</button>' : ''}<button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply Pokémon changes</button></div></div>
     </fieldset></form>`;
     bindMonActions(m);
     const form = $('pokemon-form');
     bindDirty(form);
+    bindJumpLinks();
+    $('more-details').addEventListener('toggle', e => (moreDetailsOpen = e.target.open));
     const evUpdate = () => {
       $('ev-total').textContent =
         `${statLabels.reduce((sum, _, i) => sum + (+form.elements[`ev${i}`].value || 0), 0)} / 510 EVs`;
@@ -975,6 +1032,7 @@
                 : [0, 0, 0, 0, 0, 0];
           spread.forEach((n, i) => (form.elements[`ev${i}`].value = n));
           dirty = true;
+          form.classList.add('is-dirty');
           evUpdate();
           sync();
         }),
@@ -1111,11 +1169,13 @@
         '',
       )}${ERCore.LANGUAGES[value] ? '' : `<option value="${value}" selected>Unknown (${value})</option>`}</select></label>`;
   }
+  let moreDetailsOpen = false;
   function originPanel(m) {
-    return `<section class="panel"><div class="panel-heading"><h2>TRAINER & ORIGIN</h2><span>Changing OT name or ID makes the game treat it as traded</span></div><div class="field-grid">
+    return `<details class="panel more-details" id="more-details" ${moreDetailsOpen ? 'open' : ''}><summary class="panel-heading"><h2>MORE DETAILS</h2><span>Original trainer, origin, Hidden Power, markings</span></summary><div class="field-grid">
+    ${selectField('Hidden Power type', 'hpType', m.hpType, [...catalog.types, 'None'])}${numberField('Met level', 'metLevel', m.metLevel, 0, 100)}<span></span>
     <label class="field"><span>OT name · up to 7 characters</span><input name="otName" value="${html(m.otName)}" maxlength="7" required></label>${numberField('OT trainer ID', 'otTid', m.otid & 0xffff, 0, 65535)}${numberField('OT secret ID', 'otSid', m.otid >>> 16, 0, 65535)}
     ${selectField('OT gender', 'otGender', m.otGender, ['Male', 'Female'])}${numberField('Met location ID', 'metLocation', m.metLocation, 0, 255)}${languageField(m.language)}
-    </div><div class="checkrow"><span class="check-label">Markings</span>${MARKINGS.map((mk, i) => `<label><input name="mark${i}" type="checkbox" ${(m.markings >> i) & 1 ? 'checked' : ''}> ${mk}</label>`).join('')}<label><input name="alpha" type="checkbox" ${m.alpha ? 'checked' : ''}> Alpha</label><label><input name="eventMon" type="checkbox" ${m.eventMon ? 'checked' : ''}> Fateful encounter</label></div><p class="field-help">Your trainer: ${html(save.trainerCard().name)} · ID ${save.trainerCard().tid} / ${save.trainerCard().sid}. Pokémon with a different OT may disobey at high levels.</p></section>`;
+    </div><div class="checkrow"><span class="check-label">Markings</span>${MARKINGS.map((mk, i) => `<label><input name="mark${i}" type="checkbox" ${(m.markings >> i) & 1 ? 'checked' : ''}> ${mk}</label>`).join('')}<label><input name="alpha" type="checkbox" ${m.alpha ? 'checked' : ''}> Alpha</label><label><input name="eventMon" type="checkbox" ${m.eventMon ? 'checked' : ''}> Fateful encounter</label><label><input name="egg" type="checkbox" ${m.egg ? 'checked' : ''}> Egg</label><label><input name="speedDown" type="checkbox" ${m.speedDown ? 'checked' : ''}> Zero Speed IV</label></div><p class="field-help">Your trainer: ${html(save.trainerCard().name)} · ID ${save.trainerCard().tid} / ${save.trainerCard().sid}. Changing the OT name or ID makes the game treat this Pokémon as traded, and one with a different OT may disobey at high levels.</p></details>`;
   }
   function conditionPanel(m) {
     const key = statusKey(m.status);
@@ -1535,6 +1595,7 @@
     });
   }
   // ---- Trainer & bag tab --------------------------------------------------------------------
+  let boxesOpen = false;
   let bagDraft = new Map(),
     bagFilter = { text: '', owned: 'all', group: 'all' };
   // Bag pockets come from the game's item data; imported profiles without it fall back
@@ -1590,24 +1651,17 @@
     </div><div class="checkrow"><label><input name="updateOwned" type="checkbox" checked> Also update the OT on Pokémon I caught, so they stay mine and keep obeying</label></div>
     <div class="form-footer"><p>If you change your name or IDs without updating your Pokémon, high-level ones may stop obeying you.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply trainer card</button></div></div></section></fieldset></form>
     ${money.supported ? `<form id="money-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>MONEY & POINTS</h2><span>Max ¥999,999 · 9,999 coins · 9,999 BP</span></div><div class="field-grid">${numberField('Money (¥)', 'money', money.money, 0, 999999)}${numberField('Game Corner coins', 'coins', money.coins, 0, 9999)}${bp.supported ? numberField('Battle Points (BP)', 'battlePoints', bp.battlePoints, 0, 9999) + numberField('Trainer card BP (total earned)', 'cardBattlePoints', bp.cardBattlePoints, 0, 9999) : ''}</div><div class="form-footer"><p>Adding Battle Points also adds them to the trainer card total, unless you change that total yourself.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply money & points</button></div></div></section></fieldset></form>` : '<p class="notice warning">Money could not be read safely from this save, so money editing is turned off.</p>'}
-    <form id="boxes-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>PC BOXES</h2><span>Names up to 8 characters</span></div><div class="field-grid" style="margin-bottom:16px">${selectField(
+    <form id="boxes-form"><fieldset ${off} class="plain"><details class="panel" id="boxes-panel" ${boxesOpen ? 'open' : ''}><summary class="panel-heading"><h2>PC BOXES</h2><span>Box names, wallpapers and the box the PC opens on</span></summary><div class="field-grid" style="margin-bottom:16px">${selectField(
       'Box shown when the PC opens',
       'currentBox',
       storage.currentBox,
       Array.from({ length: 26 }, (_, b) => save.boxName(b)),
-    )}</div><div class="box-name-grid">${Array.from({ length: 26 }, (_, b) => `<div class="box-name-cell"><label class="field"><span>Box ${b + 1} · ${save.box(b).filter(m => m.species).length}/30</span><input name="box${b}" value="${html(save.boxName(b))}" maxlength="8"></label><label class="field"><span>Wallpaper</span><select name="wall${b}">${storage.wallpapers[b] >= WALLPAPER_NAMES.length ? `<option value="${storage.wallpapers[b]}" selected>Special (${storage.wallpapers[b]})</option>` : ''}${WALLPAPER_NAMES.map((w, i) => `<option value="${i}"${i === storage.wallpapers[b] ? ' selected' : ''}>${w}</option>`).join('')}</select></label></div>`).join('')}</div><div class="form-footer"><p>Names use the game's character set.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply PC boxes</button></div></div></section></fieldset></form>
+    )}</div><div class="box-name-grid">${Array.from({ length: 26 }, (_, b) => `<div class="box-name-cell"><label class="field"><span>Box ${b + 1} · ${save.box(b).filter(m => m.species).length}/30</span><input name="box${b}" value="${html(save.boxName(b))}" maxlength="8"></label><label class="field"><span>Wallpaper</span><select name="wall${b}">${storage.wallpapers[b] >= WALLPAPER_NAMES.length ? `<option value="${storage.wallpapers[b]}" selected>Special (${storage.wallpapers[b]})</option>` : ''}${WALLPAPER_NAMES.map((w, i) => `<option value="${i}"${i === storage.wallpapers[b] ? ' selected' : ''}>${w}</option>`).join('')}</select></label></div>`).join('')}</div><div class="form-footer"><p>Names use the game's character set.</p><div class="actions-inline"><button type="button" data-discard>Discard</button><button type="submit" class="primary">Apply PC boxes</button></div></div></details></fieldset></form>
     <section class="panel" id="bag-panel"><div class="panel-heading"><h2>BAG</h2><span id="bag-count"></span></div><p class="notice">Elite Redux bags hold each item once with unlimited uses, so an item is simply owned or not. Key items and HMs can unlock story areas early; add them with care.</p>
-    <div class="bag-tools"><label class="field"><span>Search items</span><input id="bag-search" type="search" value="${html(bagFilter.text)}" placeholder="Name or ID" autocomplete="off"></label><label class="field"><span>Pocket</span><select id="bag-group">${Object.entries(
-      itemGroups(),
-    )
-      .map(
-        ([k, l]) => `<option value="${k}"${k === bagFilter.group ? ' selected' : ''}>${l}</option>`,
-      )
-      .join(
-        '',
-      )}</select></label><label class="field"><span>Show</span><select id="bag-owned"><option value="all">Owned and not owned</option><option value="owned">Owned only</option><option value="missing">Not owned</option></select></label></div>
+    <div class="bag-tools"><label class="field"><span>Search items</span><input id="bag-search" type="search" value="${html(bagFilter.text)}" placeholder="Name or ID" autocomplete="off"></label><label class="field"><span>Show</span><select id="bag-owned"><option value="all">Owned and not owned</option><option value="owned">Owned only</option><option value="missing">Not owned</option></select></label></div>
+    <div class="pocket-chips" id="bag-pockets" role="group" aria-label="Bag pocket"></div>
     <div class="actions-inline bag-bulk"><button type="button" id="bag-all" ${off}>Own all shown</button><button type="button" id="bag-none" ${off}>Remove all shown</button></div>
-    <div id="bag-list" class="bag-grid"></div><div class="form-footer"><p id="bag-pending">No pending bag changes.</p><div class="actions-inline"><button type="button" id="bag-discard">Discard</button><button type="button" class="primary" id="bag-apply" ${off}>Apply bag changes</button></div></div></section>`;
+    <div id="bag-list" class="bag-grid"></div><div class="form-footer"><p id="bag-pending">No pending bag changes.</p><div class="actions-inline"><button type="button" id="bag-discard">Discard</button><button type="button" class="primary" id="bag-apply" data-dirty-apply ${off}>Apply bag changes</button></div></div></section>`;
     const tf = $('trainer-form');
     bindDirty(tf);
     tf.onsubmit = e => {
@@ -1665,6 +1719,7 @@
     }
     const bf = $('boxes-form');
     bindDirty(bf);
+    $('boxes-panel').addEventListener('toggle', e => (boxesOpen = e.target.open));
     bf.onsubmit = e => {
       e.preventDefault();
       apply(() => {
@@ -1692,12 +1747,29 @@
     };
     const pending = () => {
       dirty = bagDraft.size > 0;
+      $('bag-panel').classList.toggle('is-dirty', dirty);
       sync();
       $('bag-pending').textContent = bagDraft.size
         ? `${bagDraft.size} pending item change${bagDraft.size === 1 ? '' : 's'} · apply to save them`
         : 'No pending bag changes.';
       $('bag-count').textContent =
         `${items.filter(i => isOwned(i.id)).length} of ${items.length} items owned`;
+      drawPockets();
+    };
+    const drawPockets = () => {
+      $('bag-pockets').innerHTML = Object.entries(itemGroups())
+        .map(([key, label]) => {
+          const inPocket = key === 'all' ? items : items.filter(i => itemGroup(i) === key);
+          const have = inPocket.filter(i => isOwned(i.id)).length;
+          return `<button type="button" data-pocket="${key}" aria-pressed="${key === bagFilter.group}">${html(label)} <small>${have}/${inPocket.length}</small></button>`;
+        })
+        .join('');
+    };
+    $('bag-pockets').onclick = e => {
+      const chip = e.target.closest('[data-pocket]');
+      if (!chip) return;
+      bagFilter.group = chip.dataset.pocket;
+      drawBag();
     };
     const drawBag = () => {
       const list = shown();
@@ -1724,10 +1796,6 @@
     };
     $('bag-search').oninput = e => {
       bagFilter.text = e.target.value;
-      drawBag();
-    };
-    $('bag-group').onchange = e => {
-      bagFilter.group = e.target.value;
       drawBag();
     };
     $('bag-owned').onchange = e => {
@@ -1804,7 +1872,7 @@
     <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per species. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
     <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label><label class="field"><span>Show</span><select id="dex-show"><option value="all">All species</option><option value="caught">Caught</option><option value="seen">Seen, not caught</option><option value="none">Not seen</option></select></label><span></span></div>
     <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button></div>
-    <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" ${off}>Apply Pokédex changes</button></div></div></section>
+    <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
     <form id="stats-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>GAME STATS</h2><span>Shown on the trainer card and in TV shows</span></div><div class="field-grid">${Object.entries(
       ERCore.GAME_STATS_EDITABLE,
     )
@@ -1836,6 +1904,7 @@
     };
     const pending = () => {
       dirty = dexDraft.size > 0;
+      $('dex-panel').classList.toggle('is-dirty', dirty);
       sync();
       let s = 0,
         c = 0;
@@ -2285,6 +2354,20 @@
       individualColors: 'Individual Pokémon colors',
       doubleBattles: 'Double battles',
     };
+    const hints = {
+      abilityRng:
+        'Rerolls every Pokémon’s three ability choices from its PID. Switching it changes them all at once.',
+      innateRng:
+        'Rerolls every Pokémon’s three innates from its PID. Switching it changes them all at once.',
+      typeRng: 'Rerolls every Pokémon’s types from its PID.',
+      encounterRng: 'Randomizes the wild Pokémon you meet from now on.',
+      encLegendRng: 'Lets legendary Pokémon appear in randomized encounters.',
+      moveRng: 'Randomizes movesets the game generates from now on. Moves already learned stay.',
+      enableEvs: 'When off, EVs are ignored in stat calculations.',
+      permanentRepel: 'Keeps weaker wild Pokémon away without using Repels.',
+    };
+    const toggle = ([k, l]) =>
+      `<label class="switch-field"><span>${l}${hints[k] ? `<small>${hints[k]}</small>` : ''}</span><input name="${k}" type="checkbox" ${o[k] ? 'checked' : ''}></label>`;
     const o = options(),
       labels = {
         abilityRng: 'Ability randomizer',
@@ -2302,24 +2385,18 @@
         permanentRepel: 'Permanent repel',
       };
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Your game, configured.</h1><p>Read directly from your save. Only the selected option bits are changed.</p></div><p class="notice">Turning an ability, innate, or type randomizer on or off immediately changes derived results for every Pokémon. Encounter settings affect future encounters. Existing stored moves stay as saved; the move randomizer affects generated movesets.</p><form id="settings-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="padding:0;border:0;margin:0"><section class="panel"><div class="panel-heading"><h2>RUN RULES</h2><span>${save.badge() === 9 ? 'Champion clear' : `${save.badge()} badge stage`} · Level cap ${save.cap()}</span></div><div class="field-grid">${selectField('Difficulty', 'difficulty', o.difficulty, ['Easy', 'Ace', 'Elite', 'Hell'])}${selectField('Level caps', 'levelCaps', o.levelCaps, ['Easy caps', 'More caps', 'Elite caps', 'Caps off'])}${selectField('Shiny rate', 'shinyRate', o.shinyRate, ['1 / 1,024', '1 / 128', '1 / 5', 'Reserved mode (default odds)'])}</div><h3 class="settings-section">RANDOMIZERS</h3><div class="settings-grid">${Object.entries(
+      `<div class="page-heading"><h1>Your game, configured.</h1><p>Read directly from your save. Only the selected option bits are changed.</p></div><p class="notice">Settings that change existing Pokémon say so below. Nothing changes until you apply.</p><form id="settings-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="padding:0;border:0;margin:0"><section class="panel"><div class="panel-heading"><h2>RUN RULES</h2><span>${save.badge() === 9 ? 'Champion clear' : `${save.badge()} badge stage`} · Level cap ${save.cap()}</span></div><div class="field-grid">${selectField('Difficulty', 'difficulty', o.difficulty, ['Easy', 'Ace', 'Elite', 'Hell'])}${selectField('Level caps', 'levelCaps', o.levelCaps, ['Easy caps', 'More caps', 'Elite caps', 'Caps off'])}${selectField('Shiny rate', 'shinyRate', o.shinyRate, ['1 / 1,024', '1 / 128', '1 / 5', 'Reserved mode (default odds)'])}</div><h3 class="settings-section">RANDOMIZERS</h3><div class="settings-grid">${Object.entries(
         labels,
       )
         .slice(0, 6)
-        .map(
-          ([k, l]) =>
-            `<label class="switch-field">${l}<input name="${k}" type="checkbox" ${o[k] ? 'checked' : ''}></label>`,
-        )
+        .map(toggle)
         .join(
           '',
         )}</div><h3 class="settings-section">PLAY OPTIONS</h3><div class="settings-grid">${Object.entries(
         labels,
       )
         .slice(6)
-        .map(
-          ([k, l]) =>
-            `<label class="switch-field">${l}<input name="${k}" type="checkbox" ${o[k] ? 'checked' : ''}></label>`,
-        )
+        .map(toggle)
         .join(
           '',
         )}</div><h3 class="settings-section">INTERFACE & BATTLE</h3><div class="field-grid">${selectField('Battle speed', 'battleSpeed', o.battleSpeed, ['1×', '2×', '3×', '4×'])}${selectField('Overworld speed', 'overworldSpeed', o.overworldSpeed, ['Normal', '2×', '4×', '8×'])}${selectField('Text speed', 'textSpeed', o.textSpeed, ['Slow', 'Mid', 'Fast', 'Instant'])}${selectField('HP bar speed', 'hpBarSpeed', o.hpBarSpeed, ['Slow', 'Mid', 'Fast', 'Instant'])}${selectField('Battle animations', 'battleSceneOff', o.battleSceneOff, ['On', 'Off'])}${selectField('Battle style', 'battleStyle', o.battleStyle, ['Shift', 'Set'])}${selectField('Sound', 'sound', o.sound, ['Mono', 'Stereo'])}${selectField('Button mode', 'buttonMode', o.buttonMode, ['Normal', 'LR', 'L = A'])}${selectField(
@@ -2330,10 +2407,7 @@
       )}${selectField('Battle UI skin', 'battleTheme', o.battleTheme, ['Elite Redux Dark', 'Elite Redux Clear', 'Diamond & Pearl', 'Classic'])}</div><div class="settings-grid" style="margin-top:16px">${Object.entries(
         extraSwitches,
       )
-        .map(
-          ([k, l]) =>
-            `<label class="switch-field">${l}<input name="${k}" type="checkbox" ${o[k] ? 'checked' : ''}></label>`,
-        )
+        .map(toggle)
         .join(
           '',
         )}</div><div class="form-footer"><p>Stat-affecting settings also refresh party stat caches.</p><div class="actions-inline"><button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply game settings</button></div></div></section></fieldset></form>
@@ -2572,7 +2646,7 @@
     return name || fallback;
   }
   function exportSave(ext) {
-    if (!guard()) return;
+    if (!guard(() => exportSave(ext))) return;
     try {
       const bytes = save.export();
       const suffix = ext || (filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav');
@@ -2662,7 +2736,7 @@
   }
   $('save-file').onchange = e => load(e.target.files[0]);
   $('open-button').onclick = () => {
-    if (guard()) $('save-file').click();
+    if (guard(() => $('save-file').click())) $('save-file').click();
   };
   $('backup-button').onclick = backup;
   $('export-button').onclick = () => exportSave();
@@ -2691,7 +2765,7 @@
   document.querySelectorAll('[data-roster]').forEach(
     e =>
       (e.onclick = () => {
-        if (!guard()) return;
+        if (!guard(() => e.click())) return;
         resetSearch();
         roster = e.dataset.roster;
         const mons = roster === 'party' ? save.party() : save.box(box).filter(m => m.species);
@@ -2701,7 +2775,13 @@
       }),
   );
   $('box-select').onchange = e => {
-    if (!guard()) {
+    const wanted = e.target.value;
+    if (
+      !guard(() => {
+        e.target.value = wanted;
+        e.target.dispatchEvent(new Event('change'));
+      })
+    ) {
       e.target.value = box;
       return;
     }
@@ -2711,6 +2791,10 @@
     drawRoster();
     render();
   };
+  $('roster-toggle').onclick = () => {
+    rosterOpen = !rosterOpen;
+    drawRosterToggle();
+  };
   $('roster-filter').oninput = () => drawRoster();
   $('roster-scope').onchange = () => drawRoster();
   for (const id of ['welcome-version', 'workspace-version'])
@@ -2719,7 +2803,7 @@
   document.querySelectorAll('[data-tab]').forEach(
     e =>
       (e.onclick = () => {
-        if (!guard()) return;
+        if (!guard(() => e.click())) return;
         resetSearch();
         if (e.dataset.tab !== 'finder') stopFinder();
         tab = e.dataset.tab;

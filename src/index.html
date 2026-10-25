@@ -126,28 +126,40 @@
               <h2>YOUR ROSTER</h2>
               <span id="roster-count"></span>
             </div>
-            <div class="segmented">
-              <button data-roster="party" class="active">Party</button
-              ><button data-roster="box">PC boxes</button>
+            <button
+              type="button"
+              id="roster-toggle"
+              class="roster-toggle"
+              aria-expanded="false"
+              aria-controls="roster-body"
+            ></button>
+            <div id="roster-body" class="roster-body">
+              <div class="segmented">
+                <button data-roster="party" class="active">Party</button
+                ><button data-roster="box">PC boxes</button>
+              </div>
+              <div id="box-controls" hidden>
+                <label for="box-select" class="sr-only">PC box</label
+                ><select id="box-select"></select>
+              </div>
+              <div id="roster-actions" class="roster-actions"></div>
+              <label class="filter-wrap"
+                ><input
+                  id="roster-filter"
+                  type="search"
+                  placeholder="Search by species, nickname or type"
+                  aria-label="Search Pokémon by species, nickname or type"
+                  autocomplete="off"
+              /></label>
+              <label class="roster-scope"
+                ><input id="roster-scope" type="checkbox" checked /> Search all boxes and
+                party</label
+              >
+              <div id="roster-list"></div>
+              <div class="roster-footer">
+                <span class="tiny-led"></span> Editing a copy in memory
+              </div>
             </div>
-            <div id="box-controls" hidden>
-              <label for="box-select" class="sr-only">PC box</label
-              ><select id="box-select"></select>
-            </div>
-            <div id="roster-actions" class="roster-actions"></div>
-            <label class="filter-wrap"
-              ><input
-                id="roster-filter"
-                type="search"
-                placeholder="Search by species, nickname or type"
-                aria-label="Search Pokémon by species, nickname or type"
-                autocomplete="off"
-            /></label>
-            <label class="roster-scope"
-              ><input id="roster-scope" type="checkbox" checked /> Search all boxes and party</label
-            >
-            <div id="roster-list"></div>
-            <div class="roster-footer"><span class="tiny-led"></span> Editing a copy in memory</div>
           </aside>
           <div class="detail">
             <nav class="tabs" aria-label="Editor sections">
@@ -164,7 +176,7 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.6.0</span></span
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.7.0</span></span
         ><span class="footer-links"
           ><button id="privacy-button" class="text-button">Privacy</button
           ><button id="terms-button" class="text-button">Terms</button></span
