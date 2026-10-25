@@ -697,6 +697,41 @@ input[type='checkbox'] {
   line-height: 1.5;
   display: block;
 }
+/* Combined abilities: each part's own effect */
+.ability-parts {
+  margin-top: 10px;
+  font-size: 11px;
+}
+.ability-parts summary {
+  cursor: pointer;
+  color: var(--accent);
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.ability-parts dl {
+  margin: 6px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+.ability-parts dt {
+  color: var(--ink);
+  font-weight: 600;
+  margin-top: 8px;
+}
+.ability-parts dt:first-child {
+  margin-top: 0;
+}
+.ability-parts dd {
+  margin: 2px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+@media (max-width: 760px), (any-pointer: coarse) {
+  .ability-parts summary {
+    min-height: 44px;
+  }
+}
 .notice {
   font-size: 11px;
   color: var(--muted);
@@ -1477,7 +1512,7 @@ dialog {
   position: fixed;
   z-index: 30;
   max-height: calc(100vh - 28px);
-  max-height: calc(var(--viewport-height, 100dvh) - 28px);
+  max-height: min(calc(var(--viewport-height, 100dvh) - 28px), calc(100dvh - 28px));
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -1502,7 +1537,7 @@ body.dialog-open > main {
   );
   max-width: 760px;
   max-height: calc(100vh - 28px);
-  max-height: calc(var(--viewport-height, 100dvh) - 28px);
+  max-height: min(calc(var(--viewport-height, 100dvh) - 28px), calc(100dvh - 28px));
   padding: 20px;
   overflow: hidden;
 }
@@ -1525,7 +1560,9 @@ body.dialog-open > main {
   margin: 0;
 }
 #catalog-picker .picker-body {
-  flex: 1;
+  /* An auto basis, not 0: the dialog only has a max-height, and Safari collapses a
+     zero-basis child of an indefinite-height column to nothing. */
+  flex: 1 1 auto;
   min-height: 0;
 }
 .picker-body,

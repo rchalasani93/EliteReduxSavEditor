@@ -384,6 +384,38 @@
   function mon() {
     return ref ? save.mon(ref) : null;
   }
+  // Elite Redux combines abilities, described as "Color Change + Protean + Fur Coat".
+  // Each named part that is itself an ability can be expanded to its own effect.
+  const abilityPartCache = new WeakMap();
+  function abilityParts(id) {
+    let cache = abilityPartCache.get(catalog);
+    if (!cache) {
+      const byName = new Map();
+      for (const a of Object.values(catalog.abilities))
+        if (a.id > 0 && !byName.has(a.name.toLowerCase())) byName.set(a.name.toLowerCase(), a);
+      cache = { byName, parts: new Map() };
+      abilityPartCache.set(catalog, cache);
+    }
+    if (cache.parts.has(id)) return cache.parts.get(id);
+    const desc = catalog.abilities[id]?.desc || '',
+      parts = [];
+    if (desc.includes('+'))
+      for (const segment of desc.split(/\s*\+\s*|[.;,]\s*/)) {
+        const name = segment
+            .replace(/^(also has|has|and)\s+/i, '')
+            .trim()
+            .toLowerCase(),
+          part = cache.byName.get(name);
+        if (part && part.id !== +id && !parts.includes(part)) parts.push(part);
+      }
+    cache.parts.set(id, parts);
+    return parts;
+  }
+  function abilityPartsMarkup(id) {
+    const parts = abilityParts(id);
+    if (!parts.length) return '';
+    return `<details class="ability-parts"><summary>${parts.length === 1 ? `What ${html(parts[0].name)} does` : `Show each effect (${parts.length})`}</summary><dl>${parts.map(p => `<dt>${html(p.name)}</dt><dd>${html(p.desc || 'No description available.')}</dd>`).join('')}</dl></details>`;
+  }
   function abilityChoices(species, pid, opts = options(), config = catalog.config) {
     return [0, 1, 2].map(slot => ERRng.evaluate(species, pid, slot, opts, config).ability);
   }
@@ -397,7 +429,7 @@
       const picker = preview
         ? ''
         : `<button type="button" class="ability-reload" data-pick-ability="${choice ? 'ability' : 'innate'}" data-pick-index="${choice ? slot : innateIndex}" aria-label="Choose ${choice ? 'ability' : 'innate'} ${(choice ? slot : innateIndex) + 1}" title="Choose an available ability">Change</button>`;
-      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' (randomized)' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small></div>`;
+      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' (randomized)' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small>${abilityPartsMarkup(id)}</div>`;
     };
     return `<section class="ability-group" aria-label="Ability choices"><div class="ability-group-heading"><h2>ABILITY CHOICES</h2><span>${preview ? 'Preview only' : 'One equipped at a time'}</span></div><div class="abilities-list">${choices.map((id, i) => card(id, `ABILITY ${i + 1}`, opts.abilityRng, i)).join('')}</div></section><section class="ability-group" aria-label="Innate abilities"><div class="ability-group-heading"><h2>INNATES</h2></div><div class="abilities-list">${r.innates.map((id, i) => card(id, `INNATE ${i + 1}`, opts.innateRng, undefined, i)).join('')}</div></section>`;
   }
@@ -2359,6 +2391,12 @@
     'Machine',
     'Plain',
   ];
+  const DEX_SHOW = {
+    all: 'All species',
+    caught: 'Caught',
+    seen: 'Seen, not caught',
+    none: 'Not seen',
+  };
   function dexEntries() {
     const max = save.pokedex().max;
     return Object.values(catalog.species)
@@ -2376,7 +2414,7 @@
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
     <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per species. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
-    <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label><label class="field"><span>Show</span><select id="dex-show"><option value="all">All species</option><option value="caught">Caught</option><option value="seen">Seen, not caught</option><option value="none">Not seen</option></select></label><span></span></div>
+    <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label></div><div class="pocket-chips" id="dex-show" role="group" aria-label="Show species"></div>
     <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
     <form id="stats-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>GAME STATS</h2><span>Shown on the trainer card and in TV shows</span></div><div class="field-grid">${Object.entries(
@@ -2399,7 +2437,6 @@
             : dex.seen(n)
               ? 'seen'
               : 'none';
-    $('dex-show').value = dexFilter.show;
     const shown = () => {
       const q = dexFilter.text.trim().toLocaleLowerCase();
       return entries.filter(
@@ -2420,6 +2457,14 @@
         if (st === 'caught') c++;
       }
       $('dex-count').textContent = `${c} caught · ${s} seen · ${entries.length} species`;
+      // Buttons rather than a dropdown: one tap on phones, and each shows its count.
+      const counts = { all: entries.length, caught: c, seen: s - c, none: entries.length - s };
+      $('dex-show').innerHTML = Object.entries(DEX_SHOW)
+        .map(
+          ([key, label]) =>
+            `<button type="button" data-dex-show="${key}" aria-pressed="${key === dexFilter.show}">${label} <small>${counts[key]}</small></button>`,
+        )
+        .join('');
       $('dex-pending').textContent = dexDraft.size
         ? `${dexDraft.size} pending Pokédex change${dexDraft.size === 1 ? '' : 's'} · apply to save them`
         : 'No pending Pokédex changes.';
@@ -2456,8 +2501,10 @@
       dexFilter.text = e.target.value;
       draw();
     };
-    $('dex-show').onchange = e => {
-      dexFilter.show = e.target.value;
+    $('dex-show').onclick = e => {
+      const chip = e.target.closest('[data-dex-show]');
+      if (!chip) return;
+      dexFilter.show = chip.dataset.dexShow;
       draw();
     };
     document.querySelectorAll('[data-dex-bulk]').forEach(
