@@ -5,6 +5,7 @@ let html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
 for (const [marker, file] of [
   ['STYLES', 'style.css'],
   ['CATALOG', 'catalog.json'],
+  ['CATALOG_PATCHES', 'catalog-patches.json'],
   ['ICONS', 'icons.json'],
   ['CORE', 'core.js'],
   ['RNG', 'rng.js'],

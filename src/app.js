@@ -3,7 +3,27 @@
   const $ = id => document.getElementById(id),
     html = ERHtml.escape;
   const builtin = JSON.parse($('catalog').textContent);
-  let catalog = builtin,
+  // Each bundled game version: the base data, plus newer builds applied as patches over it.
+  const GAME_VERSIONS = { '2.65.4.11b': '2.65.4.11b (latest)', '2.65.4': '2.65.4 / 2.65.4.1b' };
+  const bundled = { '2.65.4': builtin };
+  for (const [version, patch] of Object.entries(JSON.parse($('catalog-patches').textContent)))
+    bundled[version] = ERCore.applyCatalogPatch(builtin, patch);
+  const LATEST_VERSION = '2.65.4.11b';
+  function rememberedVersion() {
+    try {
+      return localStorage.getItem('er-game-version');
+    } catch {
+      return null;
+    }
+  }
+  function rememberVersion(version) {
+    try {
+      localStorage.setItem('er-game-version', version);
+    } catch {
+      /* private mode: the choice just isn't remembered */
+    }
+  }
+  let catalog = bundled[rememberedVersion()] || bundled[LATEST_VERSION],
     save = null,
     filename = 'save.sav',
     roster = 'party',
@@ -1950,7 +1970,7 @@
         .join(
           '',
         )}</div><div class="form-footer"><p>Stat-affecting settings also refresh party stat caches.</p><div class="actions-inline"><button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply game settings</button></div></div></section></fieldset></form>
-    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision. The bundled catalog is the published 2.65.4 snapshot; custom or newer ROMs need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled 2.65.4 data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
+    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision, so choose your game version next to the file name. 2.65.4 and 2.65.4.11b are bundled; other builds need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled ${LATEST_VERSION} data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
     const form = $('settings-form');
     bindDirty(form);
     form.onsubmit = e => {
@@ -1990,7 +2010,7 @@
       }
     };
     $('reset-catalog').onclick = () => {
-      if (guard()) setCatalog(builtin);
+      if (guard()) setCatalog(bundled[LATEST_VERSION]);
     };
   }
   function convertCatalog(data, name) {
@@ -2047,6 +2067,40 @@
     }
     return out;
   }
+  // ---- Game version picker ---------------------------------------------------------------------
+  function bundledVersionOf(data) {
+    return Object.keys(bundled).find(v => bundled[v] === data) || null;
+  }
+  function drawVersionPickers() {
+    const current = bundledVersionOf(catalog);
+    for (const id of ['welcome-version', 'workspace-version']) {
+      const select = $(id);
+      select.innerHTML =
+        Object.entries(GAME_VERSIONS)
+          .map(([v, label]) => `<option value="${html(v)}">${html(label)}</option>`)
+          .join('') +
+        (current ? '' : `<option value="custom">Imported: ${html(catalog.version)}</option>`);
+      select.value = current || 'custom';
+    }
+    $('brand-version').textContent = `ELITE REDUX · ${current || 'CUSTOM'} DATA`;
+  }
+  function chooseVersion(version, select) {
+    const next = bundled[version];
+    if (!next) return;
+    if (!save) {
+      catalog = next;
+      buildLists();
+      rememberVersion(version);
+      drawVersionPickers();
+      return;
+    }
+    if (!guard()) {
+      select.value = bundledVersionOf(catalog) || 'custom';
+      return;
+    }
+    rememberVersion(version);
+    setCatalog(next);
+  }
   function setCatalog(next) {
     try {
       if (
@@ -2091,7 +2145,12 @@
       sync();
       drawRoster();
       render();
-      notify('Game data profile loaded. Verify it matches your ROM.');
+      drawVersionPickers();
+      notify(
+        bundledVersionOf(next)
+          ? `Using Elite Redux ${next.version} data. Abilities and innates now follow that build.`
+          : 'Game data profile loaded. Verify it matches your ROM.',
+      );
     } catch (e) {
       fail(e);
     }
@@ -2252,6 +2311,9 @@
   };
   $('roster-filter').oninput = () => drawRoster();
   $('roster-scope').onchange = () => drawRoster();
+  for (const id of ['welcome-version', 'workspace-version'])
+    $(id).onchange = e => chooseVersion(e.target.value, e.target);
+  drawVersionPickers();
   document.querySelectorAll('[data-tab]').forEach(
     e =>
       (e.onclick = () => {

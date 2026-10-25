@@ -19,7 +19,7 @@
     <header class="topbar">
       <a class="brand" href="#" aria-label="Redux Save Studio home"
         ><span class="brand-mark" aria-hidden="true">R</span
-        ><span>REDUX <b>SAVE STUDIO</b><small>ELITE REDUX · 2.65.4 DATA</small></span></a
+        ><span>REDUX <b>SAVE STUDIO</b><small id="brand-version">ELITE REDUX</small></span></a
       >
       <div class="top-actions">
         <span class="privacy"><i></i> Your save stays on this device</span
@@ -53,6 +53,14 @@
               cursor: pointer;
             "
         /></label>
+        <label class="version-pick welcome-version"
+          >Game version
+          <select id="welcome-version" aria-describedby="version-help"></select
+        ></label>
+        <p id="version-help" class="version-help">
+          Pick the Elite Redux build you play. Saves don't record it, and randomized abilities and
+          innates depend on it.
+        </p>
         <div style="text-align: center; margin: -18px 0 32px">
           <button class="text-button" id="demo-button">Try it with a demo save</button>
         </div>
@@ -89,7 +97,13 @@
       </section>
       <section id="workspace" hidden>
         <div class="savebar">
-          <div><span class="filename" id="filename"></span><small id="save-meta"></small></div>
+          <div>
+            <span class="filename" id="filename"></span><small id="save-meta"></small
+            ><label class="version-pick"
+              >Game version
+              <select id="workspace-version"></select
+            ></label>
+          </div>
           <div class="save-actions">
             <button id="open-button" class="quiet">Open another</button
             ><button id="backup-button" class="quiet">Original backup</button
@@ -149,7 +163,7 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.4.2</span></span
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.5.0</span></span
         ><span class="footer-links"
           ><button id="privacy-button" class="text-button">Privacy</button
           ><button id="terms-button" class="text-button">Terms</button></span
@@ -186,9 +200,11 @@
         randomized combination, use Ability lab with the corresponding randomizers enabled.
       </p>
       <p>
-        Bundled species, move, and ability data is the published 2.65.4 Pokédex snapshot (1,063
-        ability entries). A save does not identify its exact ROM build. Preview and search require
-        matching ROM data; custom builds can import their own Nextdex JSON in Game settings.
+        Species, move and ability data is bundled for Elite Redux 2.65.4 (also used by 2.65.4.1b)
+        and 2.65.4.11b, from ER Nextdex. A save does not identify its ROM build, so choose your
+        version next to the file name: every randomized ability and innate depends on it, because
+        each build has a different number of abilities. Other builds can import their own Nextdex
+        JSON in Game settings.
       </p>
       <p class="sources">
         Game definitions:
@@ -256,6 +272,9 @@
     </dialog>
     <script id="catalog" type="application/json">
       /* CATALOG */
+    </script>
+    <script id="catalog-patches" type="application/json">
+      /* CATALOG_PATCHES */
     </script>
     <script id="pokemon-icons" type="application/json">
       /* ICONS */
