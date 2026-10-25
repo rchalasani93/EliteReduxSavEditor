@@ -395,10 +395,10 @@ h1 {
 }
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
-  gap: 24px;
+  gap: 0 24px;
   margin: 0 0 22px;
-  overflow-x: auto;
 }
 .tabs button {
   border: 0;
@@ -457,6 +457,8 @@ h1 {
 }
 .type {
   display: inline-block;
+  align-self: center;
+  flex: none;
   padding: 2px 7px;
   border-radius: 3px;
   background: var(--type, #4d5570);
@@ -659,6 +661,7 @@ input[type='checkbox'] {
   font-size: 9px;
   margin-top: -4px;
   display: flex;
+  align-items: center;
   gap: 7px;
 }
 .move-meta .type {
