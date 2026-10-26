@@ -432,7 +432,7 @@
       const picker = preview
         ? ''
         : `<button type="button" class="ability-reload" data-pick-ability="${choice ? 'ability' : 'innate'}" data-pick-index="${choice ? slot : innateIndex}" aria-label="Choose ${choice ? 'ability' : 'innate'} ${(choice ? slot : innateIndex) + 1}" title="Choose an available ability">Change</button>`;
-      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' (randomized)' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small>${abilityPartsMarkup(id)}</div>`;
+      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${preview && randomized ? ' (randomized)' : ''}${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</span>${picker}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small>${abilityPartsMarkup(id)}</div>`;
     };
     return `<section class="ability-group" aria-label="Ability choices"><div class="ability-group-heading"><h2>ABILITY CHOICES</h2><span>${preview ? 'Preview only' : 'One equipped at a time'}</span></div><div class="abilities-list">${choices.map((id, i) => card(id, `ABILITY ${i + 1}`, opts.abilityRng, i)).join('')}</div></section><section class="ability-group" aria-label="Innate abilities"><div class="ability-group-heading"><h2>INNATES</h2></div><div class="abilities-list">${r.innates.map((id, i) => card(id, `INNATE ${i + 1}`, opts.innateRng, undefined, i)).join('')}</div></section>`;
   }
@@ -736,6 +736,13 @@
     document
       .querySelectorAll('[data-tab]')
       .forEach(e => e.classList.toggle('active', e.dataset.tab === tab));
+    // Lets the layout drop the roster on tabs that don't use the selected Pokémon, and keeps
+    // the active tab visible in the scrolling tab bar on phones.
+    $('workspace').dataset.view = tab;
+    const bar = document.querySelector('.tabs'),
+      active = bar?.querySelector('.active');
+    if (bar && active && bar.scrollWidth > bar.clientWidth)
+      bar.scrollLeft = Math.max(0, active.offsetLeft - bar.offsetLeft - 24);
     if (tab === 'settings') {
       renderSettings();
       bindCatalogPickers();
@@ -2630,7 +2637,7 @@
     const roamerSpecies = catalog.species[roamer.species];
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
-    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per Pokédex number. Forms (Megas, Primals, regional forms) share their base Pokémon's entry, so Primal Cascoon counts as Cascoon. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon. Keep it to 999 seen at most: the game's Pokédex crashes at 1,000, because it can only draw three-digit totals.</p>
+    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Changes Pokédex records only, not your Pokémon. Forms share their base Pokémon's entry (Primal Cascoon counts as Cascoon). Keep it to 999 seen: the game's Pokédex crashes at 1,000.</p>
     <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label></div><div class="pocket-chips" id="dex-show" role="group" aria-label="Show species"></div>
     <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>

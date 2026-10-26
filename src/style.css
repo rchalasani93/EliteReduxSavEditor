@@ -2551,3 +2551,178 @@ details.panel[open] > summary {
   max-height: 320px;
   margin-bottom: 14px;
 }
+
+/* ---- Usability pass 2 ---------------------------------------------------------------- */
+/* Dropdowns match text fields everywhere (Safari otherwise draws grey system boxes). */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: #0f1620;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2391a0b4' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
+  padding-right: 34px !important;
+  color: var(--ink);
+}
+select:disabled {
+  opacity: 0.55;
+}
+/* Readable small text: the smallest labels were 8-10px. */
+.field > span,
+label.field > span {
+  font-size: 11px;
+}
+.ability-card small,
+.field-help,
+.notice {
+  font-size: 12px;
+}
+.ability-card .slot-name {
+  font-size: 10px;
+}
+.equipped-badge {
+  font-size: 10px;
+  margin-left: 6px;
+}
+.tabs button {
+  font-size: 13px;
+}
+/* Ability cards: label and badge on the left, a compact Change button on the right. */
+.ability-card .slot-name {
+  flex-wrap: nowrap;
+}
+.ability-card .ability-reload {
+  width: auto;
+  height: auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid #5c4a2c;
+  border-radius: 3px;
+  color: var(--accent);
+  background: transparent;
+}
+.btn-icon {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  /* The tab bar stays on screen and scrolls sideways instead of wrapping onto two rows. */
+  .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 0 20px;
+    margin: 0 0 18px;
+    padding: 0;
+    background: var(--bg);
+    box-shadow: 0 1px 0 var(--line);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .tabs button {
+    padding: 12px 2px;
+    font-size: 14px;
+  }
+  .tabs button:last-child {
+    margin-right: 28px;
+  }
+  /* Tabs first, then the roster, then the page. */
+  .layout {
+    display: flex !important;
+    flex-direction: column;
+  }
+  .layout > .detail {
+    display: contents;
+  }
+  .layout .tabs {
+    order: 0;
+  }
+  .layout > .roster {
+    order: 1;
+    margin-bottom: 16px;
+    align-self: stretch;
+    width: 100%;
+  }
+  #editor-panel {
+    order: 2;
+    min-width: 0;
+  }
+  /* The roster is only needed where you pick a Pokémon. */
+  #workspace[data-view='trainer'] .roster,
+  #workspace[data-view='progress'] .roster,
+  #workspace[data-view='story'] .roster,
+  #workspace[data-view='settings'] .roster,
+  #workspace[data-view='review'] .roster,
+  #workspace[data-view='finder'] .roster {
+    display: none;
+  }
+  /* Compact save bar: one row of actions, Undo and Redo as icons. */
+  .savebar {
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .save-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 48px 48px !important;
+  }
+  .save-actions .btn-icon {
+    display: inline;
+    font-size: 20px;
+    line-height: 1;
+  }
+  .save-actions .btn-text {
+    display: none;
+  }
+  .health-banner {
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    font-size: 12px;
+  }
+  /* Ability cards take a third of the height they did. */
+  .ability-card {
+    padding: 12px 14px;
+  }
+  .ability-card b {
+    font-size: 15px;
+    margin: 6px 0 4px;
+  }
+  .ability-card .ability-reload {
+    min-height: 44px;
+    min-width: 76px;
+    font-size: 14px;
+  }
+  .abilities-list {
+    gap: 8px;
+  }
+  /* Section shortcuts on a Pokémon: one scrolling row. */
+  .jump-links {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 0 16px;
+    padding: 2px 0;
+  }
+  .jump-links::-webkit-scrollbar {
+    display: none;
+  }
+  .jump-links button {
+    flex-shrink: 0;
+    border-radius: 999px;
+    font-size: 13px;
+    padding: 8px 14px;
+  }
+}
+@media (max-width: 760px), (any-pointer: coarse) {
+  .ability-card .ability-reload {
+    min-height: 44px;
+    min-width: 76px;
+    font-size: 14px;
+  }
+}
