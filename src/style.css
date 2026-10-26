@@ -2547,3 +2547,7 @@ details.panel[open] > summary {
   color: var(--muted);
   font-size: 10px;
 }
+.mega-grid {
+  max-height: 320px;
+  margin-bottom: 14px;
+}

@@ -1604,6 +1604,146 @@
     };
   }
   // Fills empty PC slots with one Pokémon of each chosen species, as one undoable edit.
+  // Mega and Primal forms, picked one by one. They normally exist only in battle, so the
+  // dialog says so; they share their base Pokémon's Pokédex entry.
+  function openMegaDialog() {
+    if (!guard(() => openMegaDialog())) return;
+    const cap = save.cap(),
+      kindOf = sp => (/_PRIMAL(_|$)/.test(sp.key) ? 'primal' : 'mega');
+    const forms = Object.values(catalog.species)
+      .filter(sp => sp.id > 0 && /_(MEGA|PRIMAL)(_|$)/.test(sp.key))
+      .map(sp => ({
+        ...sp,
+        no: ERCore.dexNumber(catalog, sp.id),
+        kind: kindOf(sp),
+        base: ERCore.baseSpeciesName(catalog, sp),
+      }))
+      .sort((a, b) => a.no - b.no || a.id - b.id);
+    const owned = new Set(save.allMons().map(m => m.species)),
+      selected = new Set(),
+      view = { text: '', kind: 'all', hideOwned: true };
+    let free = 0;
+    for (let b = 0; b < 26; b++) free += save.box(b).filter(m => !m.species).length;
+    const dialog = openDialog(
+      'Mega and Primal forms',
+      'Tick the forms you want; each goes into an empty PC slot, with you as the original trainer.',
+      `<form class="bulk-form mega-form"><p class="notice warning">Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form outside battle; test a few in the game before relying on them.</p>
+      <label class="field"><span>Search</span><input name="q" type="search" placeholder="For example Charizard, Primal or Cascoon" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <div class="pocket-chips" data-mega-kind role="group" aria-label="Form kind"></div>
+      <div class="checkrow"><label><input type="checkbox" name="hideOwned" checked> Hide forms already in your party or PC</label></div>
+      <div class="actions-inline bag-bulk"><button type="button" data-mega-all>Select shown</button><button type="button" data-mega-none>Clear selection</button></div>
+      <div class="bag-grid mega-grid" data-mega-list></div>
+      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="checkrow"><label><input type="checkbox" name="recordDex" checked> Record their base Pokémon in the Pokédex (up to the 999 seen the game can show)</label></div>
+      <p class="field-help" data-mega-preview aria-live="polite"></p></form>
+      <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add selected</button></div></div>`,
+    );
+    const form = dialog.querySelector('form');
+    const shown = () => {
+      const q = view.text.trim().toLocaleLowerCase();
+      return forms.filter(
+        sp =>
+          (view.kind === 'all' || sp.kind === view.kind) &&
+          !(view.hideOwned && owned.has(sp.id)) &&
+          (!q || matchesQuery(`${sp.name} ${sp.base} ${sp.no} ${sp.kind}`.toLocaleLowerCase(), q)),
+      );
+    };
+    const preview = () => {
+      const n = selected.size;
+      dialog.querySelector('[data-mega-preview]').textContent = n
+        ? `${n} selected · ${free} empty PC slot${free === 1 ? '' : 's'}${n > free ? ` · only the first ${free} fit` : ''}.`
+        : `Nothing selected yet · ${free} empty PC slot${free === 1 ? '' : 's'}.`;
+      dialog.querySelector('[data-confirm]').disabled = !n || !free;
+    };
+    const draw = () => {
+      const counts = {
+        all: forms.length,
+        mega: forms.filter(sp => sp.kind === 'mega').length,
+        primal: forms.filter(sp => sp.kind === 'primal').length,
+      };
+      dialog.querySelector('[data-mega-kind]').innerHTML = [
+        ['all', 'All'],
+        ['mega', 'Mega'],
+        ['primal', 'Primal'],
+      ]
+        .map(
+          ([key, label]) =>
+            `<button type="button" data-kind="${key}" aria-pressed="${key === view.kind}">${label} <small>${counts[key]}</small></button>`,
+        )
+        .join('');
+      const list = shown();
+      dialog.querySelector('[data-mega-list]').innerHTML = list.length
+        ? list
+            .map(
+              sp =>
+                `<label class="bag-item${selected.has(sp.id) ? ' changed' : ''}"><input type="checkbox" data-mega="${sp.id}" ${selected.has(sp.id) ? 'checked' : ''}><span>${html(sp.name)}${owned.has(sp.id) ? ' <span class="mode-tag">Owned</span>' : ''}</span><small>#${sp.no}</small></label>`,
+            )
+            .join('')
+        : '<p class="field-help">No forms match.</p>';
+      preview();
+    };
+    form.elements.q.oninput = e => {
+      view.text = e.target.value;
+      draw();
+    };
+    form.elements.hideOwned.onchange = e => {
+      view.hideOwned = e.target.checked;
+      draw();
+    };
+    dialog.querySelector('[data-mega-kind]').onclick = e => {
+      const chip = e.target.closest('[data-kind]');
+      if (!chip) return;
+      view.kind = chip.dataset.kind;
+      draw();
+    };
+    dialog.querySelector('[data-mega-list]').onchange = e => {
+      const box = e.target.closest('[data-mega]');
+      if (!box) return;
+      if (box.checked) selected.add(+box.dataset.mega);
+      else selected.delete(+box.dataset.mega);
+      box.closest('.bag-item').classList.toggle('changed', box.checked);
+      preview();
+    };
+    dialog.querySelector('[data-mega-all]').onclick = () => {
+      shown().forEach(sp => selected.add(sp.id));
+      draw();
+    };
+    dialog.querySelector('[data-mega-none]').onclick = () => {
+      selected.clear();
+      draw();
+    };
+    form.onsubmit = e => e.preventDefault();
+    draw();
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      try {
+        const level = wholeNumber(form.elements.level.value, 'Level', 1, 100),
+          nature = form.elements.nature.value,
+          list = forms
+            .filter(sp => selected.has(sp.id))
+            .slice(0, free)
+            .map(sp => ({
+              species: sp.id,
+              level,
+              moves: suggestedMoves(sp),
+              ...(nature === 'random' ? {} : { nature: +nature }),
+            }));
+        closeDialog(dialog);
+        applyStructural(
+          () => {
+            save.createMany(
+              list,
+              { startBox: +form.elements.box.value, recordDex: form.elements.recordDex.checked },
+              `Add ${list.length} Mega and Primal form${list.length === 1 ? '' : 's'}`,
+            );
+            return { kind: 'box', box: +form.elements.box.value, slot: 0 };
+          },
+          `${list.length} Mega and Primal form${list.length === 1 ? '' : 's'} added to your PC. Undo removes them all.`,
+        );
+      } catch (e) {
+        fail(e);
+      }
+    };
+  }
   function openBulkAddDialog(source = 'caught') {
     if (!guard(() => openBulkAddDialog(source))) return;
     const entries = dexEntries(),
@@ -1782,9 +1922,10 @@
   function drawRosterActions() {
     const off = !!save.damaged.length;
     $('roster-actions').innerHTML =
-      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button><button type="button" id="add-many" ${off ? 'disabled' : ''}>Add many…</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
+      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button><button type="button" id="add-many" ${off ? 'disabled' : ''}>Add many…</button><button type="button" id="add-megas" ${off ? 'disabled' : ''}>Megas & Primals…</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
     $('add-mon').onclick = () => openAddDialog();
     $('add-many').onclick = () => openBulkAddDialog();
+    $('add-megas').onclick = () => openMegaDialog();
     $('heal-party')?.addEventListener('click', () => {
       if (guard()) apply(() => save.healParty(), 'Party healed: full HP, PP and no status.');
     });
