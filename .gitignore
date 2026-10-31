@@ -9,3 +9,4 @@ test-output/
 node_modules/
 *.tar.gz
 
+ux/
