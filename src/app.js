@@ -3661,6 +3661,74 @@
   }
   $('help-button').onclick = () => showDialog($('help-dialog'));
   $('close-help').onclick = () => closeDialog($('help-dialog'));
+  // ---- Optional analytics ------------------------------------------------------------------
+  // Present only in builds made with ER_GA_ID, loaded only after the visitor allows it, and never
+  // in the offline editor (a file:// page). Only page views are sent: nothing from the save.
+  const analytics = window.ER_ANALYTICS,
+    analyticsOn = !!analytics?.id && /^https?:$/.test(location.protocol),
+    CONSENT_KEY = 'er-analytics-consent';
+  let analyticsLoaded = false;
+  const readConsent = () => {
+    try {
+      return localStorage.getItem(CONSENT_KEY);
+    } catch {
+      return null;
+    }
+  };
+  function loadAnalytics() {
+    if (analyticsLoaded || !analyticsOn) return;
+    analyticsLoaded = true;
+    window[`ga-disable-${analytics.id}`] = false;
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () {
+      window.dataLayer.push(arguments);
+    };
+    window.gtag('js', new Date());
+    window.gtag('config', analytics.id, {
+      allow_google_signals: false,
+      allow_ad_personalization_signals: false,
+    });
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(analytics.id)}`;
+    document.head.append(script);
+  }
+  function setConsent(choice) {
+    try {
+      localStorage.setItem(CONSENT_KEY, choice);
+    } catch {
+      /* private mode: the choice lasts for this visit */
+    }
+    $('analytics-consent').hidden = true;
+    if (choice === 'yes') loadAnalytics();
+    else if (analyticsLoaded) {
+      // Stop sending and remove the Google Analytics cookies this site set.
+      window[`ga-disable-${analytics.id}`] = true;
+      for (const name of document.cookie.split(';').map(c => c.split('=')[0].trim()))
+        if (/^_ga/.test(name))
+          for (const domain of [
+            '',
+            `; domain=${location.hostname}`,
+            `; domain=.${location.hostname}`,
+          ])
+            document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/${domain}`;
+    }
+  }
+  document
+    .querySelectorAll('[data-analytics]')
+    .forEach(el => (el.hidden = (el.dataset.analytics === 'on') !== analyticsOn));
+  if (analyticsOn) {
+    $('analytics-yes').onclick = () => setConsent('yes');
+    $('analytics-no').onclick = () => setConsent('no');
+    $('analytics-more').onclick = () => showDialog($('privacy-dialog'));
+    $('analytics-change').onclick = () => {
+      closeDialog($('privacy-dialog'));
+      $('analytics-consent').hidden = false;
+    };
+    const consent = readConsent();
+    if (consent === 'yes') loadAnalytics();
+    else if (consent !== 'no') $('analytics-consent').hidden = false;
+  }
   $('editor-panel').addEventListener('click', e => {
     const chooser = e.target.closest('[data-catalog-input]');
     if (chooser) {
@@ -3692,6 +3760,11 @@
     parsed.getElementById('health-banner').innerHTML = '';
     parsed.getElementById('box-select').innerHTML = '';
     parsed.getElementById('toast').setAttribute('hidden', '');
+    // The offline editor never carries analytics.
+    parsed
+      .querySelectorAll('#analytics-config, script[src*="googletagmanager"]')
+      .forEach(e => e.remove());
+    parsed.getElementById('analytics-consent').setAttribute('hidden', '');
     parsed
       .querySelectorAll(
         'datalist,dialog:not(#help-dialog):not(#privacy-dialog):not(#terms-dialog),.dialog-backdrop,[data-transient-download]',

@@ -61,6 +61,10 @@ jobs:
         if: >-
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
           (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        # Google Analytics is added only when the repository variable GA_MEASUREMENT_ID is set
+        # (Settings > Secrets and variables > Actions > Variables). Visitors must opt in.
+        env:
+          ER_GA_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: |
           (cd site-src/main && npm run build)
           (cd site-src/develop && ER_CHANNEL=dev npm run build)

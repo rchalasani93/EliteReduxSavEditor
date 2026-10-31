@@ -16,6 +16,23 @@
     </style>
   </head>
   <body>
+    <div
+      id="analytics-consent"
+      class="analytics-consent"
+      role="region"
+      aria-label="Usage statistics"
+      hidden
+    >
+      <p>
+        Allow anonymous usage statistics (Google Analytics page views) to help improve the editor?
+        Your save and your edits never leave this device.
+        <button type="button" class="link-button" id="analytics-more">Privacy details</button>
+      </p>
+      <div class="actions-inline">
+        <button type="button" id="analytics-no">No thanks</button
+        ><button type="button" class="primary" id="analytics-yes">Allow</button>
+      </div>
+    </div>
     <header class="topbar">
       <a class="brand" href="#" aria-label="Redux Save Studio home"
         ><span class="brand-mark" aria-hidden="true">R</span
@@ -250,11 +267,29 @@
         and edited saves) are created on your own device.
       </p>
       <h3>What the editor collects</h3>
-      <p>
+      <p data-analytics="off">
         Nothing. There are no accounts, cookies, analytics, ads or tracking scripts, and the page
         makes no network requests after it loads. Pokémon artwork and game data are built into the
         page.
       </p>
+      <div data-analytics="on" hidden>
+        <p>
+          Only if you allow it: anonymous usage statistics through Google Analytics, to see how many
+          people use the editor. It records page views with your browser, device type, approximate
+          country and the site that referred you, and sets Google Analytics cookies. Nothing about
+          your save, your Pokémon or your edits is ever sent. Advertising features and Google
+          signals are turned off.
+        </p>
+        <p>
+          If you choose No, Google Analytics is never loaded and the page makes no network requests
+          after it loads. Your choice is kept in this browser.
+          <button type="button" id="analytics-change">Change my choice</button>
+        </p>
+        <p>
+          There are no accounts or ads. Pokémon artwork and game data are built into the page. The
+          downloaded offline editor never includes analytics.
+        </p>
+      </div>
       <h3>Hosting</h3>
       <p>
         The online version is served by GitHub Pages. GitHub may log basic request information such

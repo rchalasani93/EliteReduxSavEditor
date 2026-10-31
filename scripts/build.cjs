@@ -30,6 +30,17 @@ if (process.env.ER_CHANNEL === 'dev') {
       '<body class="dev-build">\n    <div class="dev-banner" role="note">Development preview from the develop branch. Features may change or break; keep a backup of your save. <a href="../">Open the stable editor</a></div>',
     );
 }
+// ER_GA_ID adds Google Analytics (a GA4 measurement ID such as G-ABC123XYZ). The page loads it
+// only after the visitor agrees, and only page views are sent: never save data.
+const gaId = (process.env.ER_GA_ID || '').trim();
+if (gaId) {
+  if (!/^G-[A-Z0-9]{4,20}$/.test(gaId))
+    throw new Error(`ER_GA_ID "${gaId}" is not a GA4 measurement ID.`);
+  html = html.replace(
+    '</head>',
+    `  <script id="analytics-config">window.ER_ANALYTICS = { id: '${gaId}' };</script>\n  </head>`,
+  );
+}
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 fs.writeFileSync(path.join(root, 'dist/index.html'), html);
 fs.writeFileSync(path.join(root, 'Redux Save Studio.html'), html);

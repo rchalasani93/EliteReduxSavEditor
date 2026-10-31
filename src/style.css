@@ -2726,3 +2726,49 @@ label.field > span {
     font-size: 14px;
   }
 }
+/* Usage-statistics consent: a small bar at the bottom, never covering the editor for long. */
+.analytics-consent {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(640px, calc(100% - 24px));
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px #0008;
+  font-size: 13px;
+}
+.analytics-consent[hidden] {
+  display: none;
+}
+.analytics-consent p {
+  margin: 0;
+  flex: 1;
+}
+.analytics-consent .link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: inherit;
+  min-height: 0;
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .analytics-consent {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .analytics-consent .actions-inline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+}
