@@ -811,8 +811,12 @@
     show: '',
     page: 0,
     detail: null,
+    // Card elements by species for the current run, reused across redraws.
+    cards: new Map(),
   };
-  const SPECIMENS_PER_PAGE = 24;
+  const SPECIMENS_PER_PAGE = 24,
+    // Ability layouts per worker message in the species search.
+    FINDER_BATCH = 4;
   function finderSpecies() {
     const battleForms = new Set();
     for (const sp of Object.values(catalog.species))
@@ -830,6 +834,8 @@
   function stopFinder() {
     const run = finder.run;
     if (!run) return;
+    run.unlisten?.();
+    clearTimeout(run.resumeTimer);
     run.workers.forEach(w => w.terminate());
     URL.revokeObjectURL(run.url);
     run.busy = false;
@@ -884,16 +890,55 @@
       pages > 1
         ? `<nav class="result-pager" aria-label="Specimen pages"><button type="button" data-specimen-page="${finder.page - 1}" ${finder.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${finder.page + 1} of ${pages}</span><button type="button" data-specimen-page="${finder.page + 1}" ${finder.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></nav>`
         : '';
-    $('finder-results').innerHTML = all.length
-      ? `<div class="result-heading"><h2>POKÉMON THAT CAN ROLL THEM</h2><span>${all.length.toLocaleString()} found${finder.run?.busy ? ' so far' : ''} · tap one to open it</span></div>${chips}${pager}<div class="specimen-grid">${shown
-          .map(r => {
-            const sp = catalog.species[r.species];
-            return `<button type="button" class="specimen-card" data-specimen="${html(r.species)}">${pokemonIcon(sp)}<span class="specimen-name">${html(sp.name)}</span><span class="types">${typeTags(r.types)}</span><small class="finder-abilities">${mark(r.ability)} · ${r.innates.map(mark).join(' · ')}</small></button>`;
-          })
-          .join('')}</div>${pager}`
-      : finder.run && !finder.run.busy && !finder.run.stopped
-        ? '<p class="notice">No Pokémon can roll all of these together with the current randomizer settings.</p>'
-        : '';
+    const root = $('finder-results');
+    if (!all.length) {
+      root.dataset.view = '';
+      return setMarkup(
+        root,
+        finder.run && !finder.run.busy && !finder.run.stopped
+          ? '<p class="notice">No Pokémon can roll all of these together with the current randomizer settings.</p>'
+          : '',
+      );
+    }
+    // Stable parts, each rewritten only when its markup changes. Cards are kept per species
+    // and moved rather than rebuilt, so their sprites are not decoded again on every redraw
+    // (Safari repaints a rebuilt grid of 24 sprites in a few hundred milliseconds).
+    if (root.dataset.view !== 'list') {
+      root.dataset.view = 'list';
+      root._markup = null;
+      root.innerHTML =
+        '<div class="result-heading"><h2>POKÉMON THAT CAN ROLL THEM</h2><span data-part="count"></span></div><div data-part="chips"></div><div data-part="pager-top"></div><div class="specimen-grid" data-part="grid"></div><div data-part="pager-bottom"></div>';
+    }
+    const part = name => root.querySelector(`[data-part="${name}"]`);
+    setMarkup(
+      part('count'),
+      `${all.length.toLocaleString()} found${finder.run?.busy ? ' so far' : ''} · tap one to open it`,
+    );
+    setMarkup(part('chips'), chips);
+    setMarkup(part('pager-top'), pager);
+    setMarkup(part('pager-bottom'), pager);
+    const grid = part('grid'),
+      cards = shown.map(r => {
+        let card = finder.cards.get(r.species);
+        if (!card) {
+          const sp = catalog.species[r.species];
+          card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'specimen-card';
+          card.dataset.specimen = r.species;
+          card.innerHTML = `${pokemonIcon(sp)}<span class="specimen-name">${html(sp.name)}</span><span class="types">${typeTags(r.types)}</span><small class="finder-abilities">${mark(r.ability)} · ${r.innates.map(mark).join(' · ')}</small>`;
+          finder.cards.set(r.species, card);
+        }
+        return card;
+      });
+    if (cards.length !== grid.children.length || cards.some((c, i) => grid.children[i] !== c))
+      grid.replaceChildren(...cards);
+  }
+  // Writes markup into an element only when it differs from what was last written there.
+  function setMarkup(el, markup) {
+    if (el._markup === markup) return;
+    el._markup = markup;
+    el.innerHTML = markup;
   }
   // ---- Optimal specimen: one Pokémon's page --------------------------------------------------
   // Its rolls with full descriptions, every other PID that gives the same set (paged, searched
@@ -1008,12 +1053,24 @@
     const preview = { species: d.species, pid: d.pid, abilitySlot: d.slot };
     const name = id => html(catalog.abilities[id]?.name || `#${id}`);
     const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
-    $('finder-results').innerHTML =
+    const root = $('finder-results');
+    if (root.dataset.view !== 'detail') {
+      root.dataset.view = 'detail';
+      root._markup = null;
+      root.innerHTML = '<div data-part="head"></div><div data-part="pids"></div>';
+    }
+    // The head (sprite and ability cards) changes only when another PID is picked; the PID
+    // list updates on its own as results arrive.
+    setMarkup(
+      root.querySelector('[data-part="head"]'),
       `<section class="panel specimen-detail"><div class="specimen-head"><button type="button" class="specimen-back" data-specimen-back>‹ All Pokémon</button></div>
       <div class="specimen-title">${pokemonIcon(sp)}<div><h2>${html(sp.name)}</h2><p>#${html(sp.dex || sp.id)} · ${html(ERRng.gender(sp, d.pid))} · base stat total ${bst} · PID ${pidHex(d.pid)} · ability slot ${d.slot + 1}</p><div class="types">${typeTags(sp.types)}</div></div></div>
       ${abilityCards(preview, sp, true)}
-      <div class="form-footer"><p>Enlist creates this Pokémon with this PID: choose its nickname, level, nature, shininess, held item, moves and where it goes.</p><div class="actions-inline"><button type="button" class="primary" data-specimen-enlist ${save.damaged.length ? 'disabled' : ''}>Enlist…</button></div></div></section>
-      <section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${d.results.length.toLocaleString()}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
+      <div class="form-footer"><p>Enlist creates this Pokémon with this PID: choose its nickname, level, nature, shininess, held item, moves and where it goes.</p><div class="actions-inline"><button type="button" class="primary" data-specimen-enlist ${save.damaged.length ? 'disabled' : ''}>Enlist…</button></div></div></section>`,
+    );
+    setMarkup(
+      root.querySelector('[data-part="pids"]'),
+      `<section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${d.results.length.toLocaleString()}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
       <div class="specimen-pids">${rows
         .map((r, k) => {
           const picked = r.pid === d.pid && r.slot === d.slot;
@@ -1024,7 +1081,8 @@
         pages > 1 || more
           ? `<nav class="result-pager" aria-label="PID pages"><button type="button" data-specimen-pids-page="${d.page - 1}" ${d.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${d.page + 1} of ${pages}${more ? '+' : ''}</span><button type="button" data-specimen-pids-page="${d.page + 1}" ${d.page >= pages - 1 && !more ? 'disabled' : ''}>Next ›</button></nav>`
           : ''
-      }</section>`;
+      }</section>`,
+    );
   }
   // Worker messages are not trusted for display: keep only the species, PID and slot
   // as checked numbers and recompute the abilities and types here.
@@ -1077,11 +1135,16 @@
         $('rng-code').textContent +
         `\nself.onmessage=async e=>{try{for await(const page of ERRng.findSpecies(e.data))self.postMessage({kind:'page',value:page});self.postMessage({kind:'end'});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
       const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
-      // Leave two cores for the page and the rest of the device, so the editor stays
-      // responsive while the search runs.
-      const count = Math.max(
+      // Layouts are handed out a few at a time, so the search can give way to the page:
+      // no new batches start while you scroll, tap or type, and fewer workers run when frames
+      // start to stall (a batch takes a fraction of a second, so either takes effect quickly).
+      const max = Math.max(
         1,
-        Math.min(6, (navigator.hardwareConcurrency || 4) - 2, groups.length),
+        Math.min(
+          6,
+          (navigator.hardwareConcurrency || 4) - 1,
+          Math.ceil(groups.length / FINDER_BATCH),
+        ),
       );
       const lockedSlot = finder.slot === '' ? null : +finder.slot;
       const run = {
@@ -1092,35 +1155,100 @@
         workers: [],
         total: groups.length,
         done: 0,
-        finished: 0,
         busy: true,
         stopped: false,
         started: performance.now(),
         ended: 0,
+        next: 0,
+        active: 0,
+        limit: max,
+        max,
+        pausedUntil: 0,
+        resumeTimer: 0,
+        unlisten: () => {},
+      };
+      const request = {
+        options: opts,
+        config: catalog.config,
+        targets,
+        lockedSlot,
+        pid: crypto.getRandomValues(new Uint32Array(1))[0],
       };
       stopSpecimenSearch();
       finder.run = run;
       finder.results = [];
+      finder.cards = new Map();
       finder.detail = null;
       finder.show = '';
       finder.page = 0;
-      for (let i = 0; i < count; i++) {
+      const finish = () => {
+        run.busy = false;
+        run.ended = performance.now();
+        stopFinder();
+        scheduleFinderDraw();
+      };
+      const feed = worker => {
+        if (finder.run !== run || !run.busy) return;
+        worker.idle = true;
+        if (run.next >= groups.length) {
+          if (!run.active) finish();
+          return;
+        }
+        if (performance.now() < run.pausedUntil || run.active >= run.limit) return;
+        worker.idle = false;
+        run.active++;
+        const batch = groups.slice(run.next, run.next + FINDER_BATCH);
+        run.next += batch.length;
+        worker.postMessage({ ...request, groups: batch });
+      };
+      const resume = () => run.workers.filter(w => w.idle).forEach(feed);
+      // Any interaction holds back new batches briefly.
+      const hold = () => {
+        run.pausedUntil = performance.now() + 600;
+        clearTimeout(run.resumeTimer);
+        run.resumeTimer = setTimeout(resume, 620);
+      };
+      const events = ['pointerdown', 'touchstart', 'touchmove', 'wheel', 'keydown', 'scroll'];
+      events.forEach(type => window.addEventListener(type, hold, { passive: true, capture: true }));
+      run.unlisten = () =>
+        events.forEach(type => window.removeEventListener(type, hold, { capture: true }));
+      // Frame watch: two or more frames over 100 ms in a second drop a worker; three smooth
+      // seconds add one back.
+      let last = performance.now(),
+        windowStart = last,
+        slow = 0,
+        smooth = 0;
+      const watch = now => {
+        if (finder.run !== run || !run.busy) return;
+        if (!document.hidden && now - last > 100) slow++;
+        last = now;
+        if (now - windowStart >= 1000) {
+          if (slow >= 2 && run.limit > 1) {
+            run.limit--;
+            smooth = 0;
+          } else if (!slow && ++smooth >= 3 && run.limit < run.max) {
+            run.limit++;
+            smooth = 0;
+            resume();
+          }
+          slow = 0;
+          windowStart = now;
+        }
+        requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+      for (let i = 0; i < max; i++) {
         const worker = new Worker(url);
         worker.onmessage = e => {
           if (finder.run !== run) return;
           const data = e.data;
           if (data.kind === 'page') {
             run.done++;
-            if (data.value.found.length) {
+            if (data.value.found.length)
               finder.results.push(...data.value.found.map(trustedFinderResult).filter(Boolean));
-              scheduleFinderDraw();
-            }
           } else if (data.kind === 'end') {
-            if (++run.finished === count) {
-              run.busy = false;
-              run.ended = performance.now();
-              stopFinder();
-            }
+            run.active--;
+            feed(worker);
           } else {
             run.ended = performance.now();
             stopFinder();
@@ -1135,17 +1263,10 @@
           finderStatus();
           fail(new Error(e.message || 'Species search failed.'));
         };
+        worker.idle = true;
         run.workers.push(worker);
-        // Round-robin so every worker gets a similar mix of easy and hard layouts.
-        worker.postMessage({
-          groups: groups.filter((_, n) => n % count === i),
-          options: opts,
-          config: catalog.config,
-          targets,
-          lockedSlot,
-          pid: crypto.getRandomValues(new Uint32Array(1))[0],
-        });
       }
+      resume();
       drawFinderResults();
       finderStatus();
     } catch (e) {
@@ -3877,6 +3998,7 @@
       cancelSearch();
       stopFinder();
       finder.results = [];
+      finder.cards = new Map();
       finder.run = null;
       save = next;
       searchDrafts.clear();
