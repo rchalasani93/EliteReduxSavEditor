@@ -2917,3 +2917,20 @@ label.field > span {
     grid-template-columns: 1fr;
   }
 }
+/* Move numbers: under each move in Add Pokémon and in the move chooser. */
+.move-meta {
+  flex-wrap: wrap;
+}
+.move-field .move-meta {
+  margin-top: 6px;
+  min-height: 18px;
+}
+.picker-move-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}

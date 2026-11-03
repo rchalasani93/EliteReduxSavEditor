@@ -14,6 +14,8 @@ The editor supports the modern Elite Redux 20-section format and 128 KB `.sav` /
 
 **Finding Pokémon.** The roster search matches species (including the base species of a form, so `Absol` finds Absol Mega), nickname, type or exact dex number (`#150`). With **Search all boxes and party** ticked it searches the whole party and all 26 PC boxes, shows where each match is stored, and opens it in place; untick it to filter only the list you are viewing. Several words narrow the search (`dragon ground`).
 
+**Move numbers.** Every move field shows the move's type, category, power, accuracy and max PP: in the Pokémon tab's moveset, under each move in **＋ Add Pokémon**, in the move chooser (where moves can also be searched by type or category, such as `electric special`), and in the typed suggestions.
+
 **Showdown import.** Species (including forms such as `Garchomp-Mega`), nickname, item, level, EVs, nature, shininess, happiness, `IVs: 0 Spe` and moves are imported; anything missing from this game's data is skipped with a warning. Abilities come from the PID in Elite Redux, so if the requested ability is not one of the new Pokémon's three choices, the Ability lab opens with it filled in as a search target.
 
 **Combined abilities.** Many Elite Redux abilities are several abilities in one (Prismatic Fur is Color Change + Protean + Fur Coat + Ice Scales). Wherever an ability card shows one, **Show each effect** lists every part with its own description.

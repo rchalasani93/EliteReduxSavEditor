@@ -189,6 +189,9 @@
       '<div class="dialog-head"><h2 id="catalog-picker-title"></h2><button type="button" class="icon-button" id="close-catalog-picker" aria-label="Close chooser">Close</button></div><label class="field"><span>Search by name or ID</span><input id="catalog-picker-filter" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search"></label><p id="catalog-picker-count" class="field-help" aria-live="polite"></p><div class="picker-body"><div id="catalog-picker-options"></div></div><button type="button" class="picker-more" id="catalog-picker-more">Show more options</button>';
     dialog.querySelector('h2').textContent = `Choose ${catalogLabel(kind)}`;
     document.body.append(dialog);
+    if (kind === 'moves')
+      dialog.querySelector('label.field > span').textContent =
+        'Search by name, ID, type or category';
     const filter = dialog.querySelector('#catalog-picker-filter'),
       list = dialog.querySelector('#catalog-picker-options'),
       count = dialog.querySelector('#catalog-picker-count'),
@@ -210,7 +213,16 @@
         name.textContent = entry.value.name;
         const no = entry.value.key && ERCore.dexNumber(catalog, entry.value.id);
         detail.textContent = `#${entry.value.id}${no && no !== entry.value.id ? ` · Pokédex #${no}` : ''}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
-        text.append(name, detail);
+        text.append(name);
+        if (kind === 'moves' && entry.value.id) {
+          // Type tags and the move's numbers, then its short description.
+          const stats = document.createElement('span');
+          stats.className = 'picker-move-stats';
+          stats.innerHTML = moveStats(entry.value);
+          text.append(stats);
+          detail.textContent = `#${entry.value.id}${entry.value.description ? ' · ' + entry.value.description : ''}`;
+        }
+        text.append(detail);
         button.append(text);
         button.onclick = () => {
           closeDialog(dialog);
@@ -321,6 +333,15 @@
       );
     return id;
   }
+  const MOVE_CATEGORIES = [
+    'Physical',
+    'Special',
+    'Status',
+    'Uses the higher attacking stat',
+    'Hits Defense',
+    'Uses the stronger of Physical or Special',
+    'Hits Special Defense',
+  ];
   function buildLists() {
     document.querySelectorAll('datalist').forEach(e => e.remove());
     indexes = {};
@@ -331,7 +352,11 @@
       const entries = Object.values(catalog[kind]).sort((a, b) => a.name.localeCompare(b.name));
       catalogEntries[kind] = entries.map(value => ({
         value,
-        search: `${value.name} ${value.id}`.toLocaleLowerCase(),
+        // Moves can also be found by type and category ("electric special").
+        search: (kind === 'moves' && value.id
+          ? `${value.name} ${value.id} ${(value.types || []).map(t => catalog.types[t]).join(' ')} ${MOVE_CATEGORIES[value.split] || ''}`
+          : `${value.name} ${value.id}`
+        ).toLocaleLowerCase(),
       }));
       if (kind === 'abilities') {
         const banned = new Set(catalog.config.banned);
@@ -347,7 +372,10 @@
         .map(e => {
           indexes[kind].set(e.name.toLocaleLowerCase(), e.id);
           indexes[kind].set(display(e).toLocaleLowerCase(), e.id);
-          return `<option value="${html(display(e))}"></option>`;
+          // Move suggestions carry their type and numbers as the option label.
+          return kind === 'moves' && e.id
+            ? `<option value="${html(display(e))}" label="${html(`${(e.types || []).map(t => catalog.types[t]).join('/')} · ${moveStatsText(e, false)}`)}"></option>`
+            : `<option value="${html(display(e))}"></option>`;
         })
         .join('');
       document.body.append(list);
@@ -1370,15 +1398,24 @@
   }
   // ---- Move details ----------------------------------------------------------------------------
   const openMoveDetails = new Set();
-  const MOVE_CATEGORIES = [
-    'Physical',
-    'Special',
-    'Status',
-    'Uses the higher attacking stat',
-    'Hits Defense',
-    'Uses the stronger of Physical or Special',
-    'Hits Special Defense',
-  ];
+  // One line of a move's numbers: category, power, accuracy and PP.
+  function moveStatsText(move, pp = true) {
+    if (!move || !move.id) return '';
+    const parts = [
+      MOVE_CATEGORIES[move.split] || '',
+      move.power ? `${move.power} power` : 'No power',
+      move.accuracy === undefined
+        ? ''
+        : move.accuracy
+          ? `${move.accuracy}% accuracy`
+          : 'Never misses',
+      pp ? `${ERCore.maxPP(move)} max PP` : '',
+    ];
+    return parts.filter(Boolean).join(' · ');
+  }
+  // Type tags plus the stats line, as shown under a move field.
+  const moveStats = move =>
+    move && move.id ? `${typeTags(move.types)}<span>${html(moveStatsText(move))}</span>` : '';
   function moveDetails(move) {
     if (!move || !move.id) return '<p class="field-help">No move in this slot.</p>';
     const rows = [
@@ -1456,7 +1493,7 @@
     <section class="panel" id="moves-panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind === 'party' ? 'MOVE / CURRENT PP' : 'MOVE'}</span></div><div class="moves-list">${m.moves
       .map((id, i) => {
         const move = catalog.moves[id];
-        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span><button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
+        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${moveStats(move)}<button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
       })
       .join(
         '',
@@ -1497,9 +1534,7 @@
             move = catalog.moves[id];
           const meta = $('move-meta-' + i),
             toggle = meta.querySelector('[data-move-toggle]');
-          meta.innerHTML =
-            typeTags(move.types) +
-            `<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span>`;
+          meta.innerHTML = moveStats(move);
           meta.append(toggle);
           $('move-details-' + i).innerHTML = moveDetails(move);
           if (ref.kind === 'party') {
@@ -1890,7 +1925,7 @@
       `<div class="tab-switch" role="tablist"><button type="button" role="tab" class="active" data-mode="new">Build</button><button type="button" role="tab" data-mode="import">Paste Showdown set</button></div>
     <form data-pane="new" class="add-form"><div class="field-grid two-up"><label class="field"><span>Species</span><input name="species" list="list-species" value="${html(display(catalog.species[start]))}" autocomplete="off" required></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}
     <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" maxlength="12" placeholder="Species name" autocomplete="off"></label><label class="field"><span>Held item</span><input name="heldItem" list="list-items" placeholder="None" autocomplete="off"></label></div>
-    ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label>`).join('')}</div></form>
+    ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<div class="move-field"><label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label><div class="move-meta" data-add-move-meta="${i}"></div></div>`).join('')}</div></form>
     <div data-pane="import" hidden><textarea class="set-text" rows="9" placeholder="Garchomp @ Life Orb&#10;Ability: Sand Force&#10;Level: 100&#10;EVs: 252 Atk / 4 SpD / 252 Spe&#10;Jolly Nature&#10;- Earthquake&#10;- Dragon Claw" aria-label="Showdown set"></textarea><p class="field-help" data-import-help>Species, item, level, EVs, nature, shininess, happiness and moves are imported. Abilities come from the PID: if the requested ability is not one of the new Pokémon’s choices, the Ability lab opens with it filled in.</p></div>
     <p class="section-label">Where should it go?</p>${destinationFields()}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
@@ -1898,8 +1933,17 @@
       read = bindDestination(dialog, defaultDestination());
     let mode = 'new',
       movesEdited = false;
+    // Type, category, power, accuracy and PP under each move as it is chosen.
+    const showMoveStats = i => {
+      let move = null;
+      try {
+        const value = form.elements[`move${i}`].value.trim();
+        if (value) move = catalog.moves[resolve('moves', value)];
+      } catch {}
+      dialog.querySelector(`[data-add-move-meta="${i}"]`).innerHTML = moveStats(move);
+    };
     const fillMoves = () => {
-      if (movesEdited) return;
+      if (movesEdited) return [0, 1, 2, 3].forEach(showMoveStats);
       try {
         const sp = catalog.species[resolve('species', form.elements.species.value)];
         suggestedMoves(sp)
@@ -1909,6 +1953,7 @@
             (id, i) => (form.elements[`move${i}`].value = id ? display(catalog.moves[id]) : ''),
           );
       } catch {}
+      [0, 1, 2, 3].forEach(showMoveStats);
     };
     fillMoves();
     form.elements.species.addEventListener('change', fillMoves);
@@ -1937,8 +1982,10 @@
     };
     foundNote();
     form.elements.species.addEventListener('input', foundNote);
-    for (let i = 0; i < 4; i++)
+    for (let i = 0; i < 4; i++) {
       form.elements[`move${i}`].addEventListener('input', () => (movesEdited = true));
+      form.elements[`move${i}`].addEventListener('change', () => showMoveStats(i));
+    }
     dialog.querySelectorAll('[data-mode]').forEach(
       b =>
         (b.onclick = () => {
