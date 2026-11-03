@@ -38,9 +38,15 @@
     worker = null,
     workerUrl = null,
     searchResults = [],
+    searchPage = 0,
     searchSession = null,
     matchMode = 'any',
     toastTimer;
+  // Ability lab results come in pages of 12; the search keeps running in the background until
+  // ten pages are ready, and the Next button on the last page asks for ten more.
+  const RESULTS_PER_PAGE = 12,
+    PREFETCH_PAGES = 10;
+  const SHININESS = ['Normal', 'Star shiny', 'Square shiny', 'Special palette'];
   const pokemonIcons = JSON.parse($('pokemon-icons').textContent).images,
     searchDrafts = new Map();
   const typeColors = [
@@ -373,6 +379,7 @@
         matchMode: 'any',
         lockSlot: false,
         keepGender: true,
+        shiny: 'keep',
       });
     return searchDrafts.get(key);
   }
@@ -383,6 +390,7 @@
       matchMode: $('match-any-order').checked ? 'any' : 'slots',
       lockSlot: $('lock-slot').checked,
       keepGender: $('keep-gender').checked,
+      shiny: $('apply-shiny').value,
     });
   }
   function options() {
@@ -700,6 +708,7 @@
               $('box-select').value = String(box);
             }
             searchResults = [];
+            searchPage = 0;
             rosterOpen = false;
             drawRoster();
             render();
@@ -1644,7 +1653,7 @@
       <div class="checkrow"><label><input type="checkbox" name="hideOwned" checked> Hide forms already in your party or PC</label></div>
       <div class="actions-inline bag-bulk"><button type="button" data-mega-all>Select shown</button><button type="button" data-mega-none>Clear selection</button></div>
       <div class="bag-grid mega-grid" data-mega-list></div>
-      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}</div>
       <div class="checkrow"><label><input type="checkbox" name="recordDex" checked> Record their base Pokémon in the Pokédex (up to the 999 seen the game can show)</label></div>
       <p class="field-help" data-mega-preview aria-live="polite"></p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add selected</button></div></div>`,
@@ -1737,6 +1746,7 @@
               level,
               moves: suggestedMoves(sp),
               ...(nature === 'random' ? {} : { nature: +nature }),
+              shiny: +form.elements.shiny.value,
             }));
         closeDialog(dialog);
         applyStructural(
@@ -1782,7 +1792,7 @@
     const dialog = openDialog(
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
-      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}</div>
       <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label><label><input type="checkbox" name="recordDex" checked> Record them in the Pokédex (up to the 999 seen the game can show)</label></div>
       <p class="field-help" data-bulk-preview></p><p class="field-help" data-bulk-battle hidden>Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form; the game may not expect it everywhere, so test before relying on them.</p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
@@ -1855,6 +1865,7 @@
               level,
               moves: suggestedMoves(sp),
               ...(nature === 'random' ? {} : { nature: +nature }),
+              shiny: +form.elements.shiny.value,
             }));
         closeDialog(dialog);
         let added = 0;
@@ -2875,7 +2886,7 @@
     matchMode = draft.matchMode;
     $('editor-panel').innerHTML =
       `${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${html(catalog.config.modulus)}-outcome randomizer.</p>${!on ? '<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>' : ''}
-    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="actions-inline" style="margin-bottom:12px"><button type="button" id="fill-current" ${on ? '' : 'disabled'}>Fill blanks with current abilities</button></div><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
+    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="actions-inline" style="margin-bottom:12px"><button type="button" id="fill-current" ${on ? '' : 'disabled'}>Fill blanks with current abilities</button></div><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label><label class="field apply-shiny"><span>Shininess when applied</span><select id="apply-shiny"><option value="keep">Keep current (${html(SHININESS[m.shiny] || 'Normal')})</option>${SHININESS.map((n, i) => `<option value="${i}">${n}</option>`).join('')}</select></label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
     <div id="search-results"></div><section class="panel"><div class="panel-heading"><h2>PID & FORM PREVIEW</h2><span>Changing PID can change gender and randomized types</span></div><div class="field-grid"><label class="field"><span>PID · hexadecimal</span><input id="pid-input" value="${m.pid.toString(16).toUpperCase().padStart(8, '0')}" maxlength="8" pattern="[0-9A-Fa-f]{1,8}"></label><label class="field"><span>Preview species / Mega form</span><input id="preview-species" list="list-species" value="${html(display(s))}" autocomplete="off"></label><label class="field"><span>Preview ability slot</span><select id="preview-slot">${[0, 1, 2].map(i => `<option value="${i}" ${i === m.abilitySlot ? 'selected' : ''}>Slot ${i + 1}</option>`).join('')}</select></label></div><div class="form-footer"><p>Preview does not change species or PID until you apply a PID.</p><div class="actions-inline"><button id="preview-button">Preview</button><button id="reroll-button" ${save.damaged.length ? 'disabled' : ''}>Reroll PID</button><button id="apply-pid" class="primary" ${save.damaged.length ? 'disabled' : ''}>Apply PID</button></div></div><div id="pid-preview" style="margin-top:16px"></div></section>`;
     const updateMatchLabels = () => {
       for (let i = 0; i < 4; i++)
@@ -2894,6 +2905,7 @@
     for (let i = 0; i < 4; i++) $('target-' + i).value = draft.targets[i];
     $('lock-slot').checked = draft.lockSlot;
     $('keep-gender').checked = draft.keepGender;
+    $('apply-shiny').value = draft.shiny ?? 'keep';
     updateMatchLabels();
     $('match-any-order').onchange = e => {
       matchMode = e.target.checked ? 'any' : 'slots';
@@ -2994,6 +3006,7 @@
   function resetSearch() {
     cancelSearch();
     searchResults = [];
+    searchPage = 0;
     drawResults();
     if ($('search-progress')) $('search-progress').textContent = '';
     if ($('search-meter')) $('search-meter').hidden = true;
@@ -3003,7 +3016,7 @@
     const s = searchSession,
       elapsed = s.elapsed + (s.busy ? performance.now() - s.started : 0);
     $('search-progress').textContent =
-      `${searchResults.length} verified matches loaded · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching for more…' : s.complete ? 'Search complete. All matches loaded.' : 'More matches can be searched below'}`;
+      `${searchResults.length.toLocaleString()} verified matches · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching…' : s.complete ? 'Search complete.' : 'Paused: more matches exist'}`;
     $('search-meter').value = s.percent;
   }
   function loadMoreSearch() {
@@ -3052,6 +3065,7 @@
         throw error;
       }
       searchResults = [];
+      searchPage = 0;
       searchSession = {
         request,
         complete: false,
@@ -3060,6 +3074,7 @@
         percent: 0,
         elapsed: 0,
         started: performance.now(),
+        target: RESULTS_PER_PAGE * PREFETCH_PAGES,
       };
       drawResults();
       $('search-button').disabled = true;
@@ -3104,6 +3119,8 @@
           $('cancel-search').hidden = true;
           drawResults();
           searchStatus();
+          // Keep filling pages in the background until the next ten are ready.
+          if (!s.complete && searchResults.length < s.target) loadMoreSearch();
           if (s.complete && !searchResults.length)
             $('search-progress').textContent =
               `Search complete. No matching PID exists for these targets ${request.matchMode === 'any' ? 'in any order' : 'in the exact slots'} with the current slot/gender constraints.`;
@@ -3126,47 +3143,104 @@
   }
   function drawResults() {
     if (!$('search-results')) return;
-    const current = mon();
+    const current = mon(),
+      s = searchSession,
+      loadedPages = Math.ceil(searchResults.length / RESULTS_PER_PAGE),
+      more = !!s && !s.complete;
+    // Stay on a page that exists, unless the next one is still being searched for.
+    if (searchPage >= loadedPages && !(more && s.busy)) searchPage = Math.max(0, loadedPages - 1);
+    const first = searchPage * RESULTS_PER_PAGE,
+      page = searchResults.slice(first, first + RESULTS_PER_PAGE),
+      waiting = !page.length && s?.busy;
+    const total = more
+      ? `${searchResults.length.toLocaleString()}+ matches`
+      : `${searchResults.length.toLocaleString()} match${searchResults.length === 1 ? '' : 'es'}`;
+    const pageCount = Math.max(loadedPages, searchPage + 1);
+    const numbers = [];
+    for (let i = 0; i < pageCount; i++)
+      if (i === 0 || i === pageCount - 1 || Math.abs(i - searchPage) <= 2) numbers.push(i);
+      else if (numbers[numbers.length - 1] !== '…') numbers.push('…');
+    const pager =
+      searchResults.length > RESULTS_PER_PAGE || more
+        ? `<nav class="result-pager" aria-label="Result pages"><button type="button" data-page="prev" ${searchPage === 0 ? 'disabled' : ''} aria-label="Previous page">‹ Prev</button>${numbers
+            .map(n =>
+              n === '…'
+                ? '<span class="pager-gap">…</span>'
+                : `<button type="button" data-page="${n}" aria-current="${n === searchPage ? 'page' : 'false'}" aria-label="Page ${n + 1}">${n + 1}</button>`,
+            )
+            .join(
+              '',
+            )}${more ? '<span class="pager-gap">+</span>' : ''}<button type="button" data-page="next" ${searchPage >= loadedPages - 1 && !more ? 'disabled' : ''} aria-label="Next page">Next ›</button></nav>`
+        : '';
     $('search-results').innerHTML =
-      (searchResults.length
-        ? `<div class="result-heading"><h2>SEARCH MATCHES</h2><span>${searchResults.length.toLocaleString()} loaded · Click a row to apply</span></div>`
-        : searchSession?.busy
+      (searchResults.length || waiting
+        ? `<div class="result-heading"><h2>SEARCH MATCHES</h2><span>${total} · page ${searchPage + 1} of ${pageCount}${more ? '+' : ''} · Click a row to apply</span></div>`
+        : s?.busy
           ? '<div aria-hidden="true">' +
             '<div class="skeleton-row"><span></span><span></span></div>'.repeat(3) +
             '</div>'
           : '') +
-      searchResults
-        .map((r, i) => {
-          const selected = current?.pid === r.pid && current.abilitySlot === r.slot,
-            pid = r.pid.toString(16).toUpperCase().padStart(8, '0');
-          return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' (equipped)' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied' : 'Use this PID'}</span></button>`;
-        })
-        .join('') +
-      (searchSession && !searchSession.complete
-        ? `<div class="result-pagination"><span>${searchResults.length.toLocaleString()} matches loaded. Continue searching for the next batch.</span><button id="more-search" ${searchSession.busy ? 'disabled' : ''}>${searchSession.busy ? 'Searching for more…' : 'Load more matches'}</button></div>`
-        : searchResults.length && searchSession?.complete
-          ? '<p class="field-help">All matching results have been loaded.</p>'
+      pager +
+      (waiting
+        ? '<div aria-hidden="true">' +
+          '<div class="skeleton-row"><span></span><span></span></div>'.repeat(3) +
+          '</div><p class="field-help">Searching for this page…</p>'
+        : page
+            .map((r, k) => {
+              const i = first + k,
+                selected = current?.pid === r.pid && current.abilitySlot === r.slot,
+                pid = r.pid.toString(16).toUpperCase().padStart(8, '0');
+              return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' (equipped)' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied' : 'Use this PID'}</span></button>`;
+            })
+            .join('')) +
+      (searchResults.length > RESULTS_PER_PAGE ? pager : '') +
+      (searchResults.length && s?.complete
+        ? `<p class="field-help">All ${searchResults.length.toLocaleString()} matching result${searchResults.length === 1 ? ' is' : 's are'} shown.</p>`
+        : more && !s.busy && searchPage >= loadedPages - 1
+          ? '<p class="field-help">More matches exist. Next searches for ten more pages; add targets to narrow the search.</p>'
           : '');
-    $('more-search')?.addEventListener('click', loadMoreSearch);
+    $('search-results')
+      .querySelectorAll('[data-page]')
+      .forEach(
+        b =>
+          (b.onclick = () => {
+            const want =
+              b.dataset.page === 'prev'
+                ? searchPage - 1
+                : b.dataset.page === 'next'
+                  ? searchPage + 1
+                  : +b.dataset.page;
+            searchPage = Math.max(0, want);
+            // Past the pages found so far: search for ten more.
+            if (more && (searchPage + 1) * RESULTS_PER_PAGE > searchResults.length) {
+              s.target = Math.max(s.target, (searchPage + PREFETCH_PAGES) * RESULTS_PER_PAGE);
+              loadMoreSearch();
+            }
+            drawResults();
+            $('search-results').scrollIntoView({ block: 'nearest' });
+          }),
+      );
     $('search-results')
       .querySelectorAll('[data-result]')
       .forEach(
         e =>
           (e.onclick = () => {
             if (!guard()) return;
-            const r = searchResults[+e.dataset.result];
-            if (mon().pid === r.pid && mon().abilitySlot === r.slot) {
+            const r = searchResults[+e.dataset.result],
+              shinyChoice = $('apply-shiny')?.value ?? 'keep',
+              patch = { pid: r.pid, abilitySlot: r.slot };
+            if (shinyChoice !== 'keep' && +shinyChoice !== mon().shiny) {
+              // Same bookkeeping as the Pokémon form: the game keeps the highest shininess seen.
+              patch.shiny = +shinyChoice;
+              patch.maxShiny = Math.max(mon().maxShiny, patch.shiny);
+            }
+            if (mon().pid === r.pid && mon().abilitySlot === r.slot && patch.shiny === undefined) {
               notify('This PID is already applied.');
               return;
             }
             apply(
-              () =>
-                save.editMon(
-                  ref,
-                  { pid: r.pid, abilitySlot: r.slot },
-                  `Apply ability combination to ${mon().nickname}`,
-                ),
-              'Verified combination applied. Your search is preserved.',
+              () => save.editMon(ref, patch, `Apply ability combination to ${mon().nickname}`),
+              `Verified combination applied${patch.shiny ? `, ${SHININESS[patch.shiny].toLowerCase()}` : ''}. Your search is preserved.`,
               { keepSearch: true },
             );
           }),
@@ -3574,6 +3648,7 @@
       box = 0;
       dirty = false;
       searchResults = [];
+      searchPage = 0;
       $('welcome').hidden = true;
       $('workspace').hidden = false;
       $('filename').textContent = filename;

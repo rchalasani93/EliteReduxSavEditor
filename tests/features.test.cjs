@@ -536,3 +536,24 @@ test('2.65.5.2b data: ROM-checked randomizer config, new species and abilities',
   // The new items carry their bag pocket.
   assert.equal(v5.items[440].pocket, 'mega');
 });
+
+test('Add many and Megas & Primals can create shiny Pokémon', () => {
+  const s = new core.Save(fixture(), catalog);
+  s.createMany(
+    [
+      { species: 25, level: 5, moves: [1], shiny: 1 },
+      { species: 26, level: 5, moves: [1], shiny: 2 },
+      { species: 27, level: 5, moves: [1] },
+    ],
+    { recordDex: false },
+  );
+  const added = s.box(0).filter(m => m.species);
+  assert.deepEqual(
+    added.slice(-3).map(m => [m.species, m.shiny, m.maxShiny]),
+    [
+      [25, 1, 1],
+      [26, 2, 2],
+      [27, 0, 0],
+    ],
+  );
+});

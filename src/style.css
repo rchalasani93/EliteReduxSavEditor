@@ -2786,3 +2786,38 @@ label.field > span {
   font-size: 12px;
   opacity: 0.75;
 }
+/* Ability lab result pages */
+.result-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0;
+}
+.result-pager button {
+  min-width: 40px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.result-pager button[aria-current='page'] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #2a2414;
+}
+.result-pager .pager-gap {
+  color: var(--muted);
+  padding: 0 2px;
+}
+.search-control .apply-shiny {
+  min-width: 200px;
+}
+@media (max-width: 760px), (any-pointer: coarse) {
+  .result-pager button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .result-pager button[data-page='prev'],
+  .result-pager button[data-page='next'] {
+    flex: 1 1 auto;
+  }
+}

@@ -175,12 +175,14 @@ async function runEngine(engine) {
     await page.locator('#target-0').fill('#343');
     await page.locator('#search-button').tap();
     await page.locator('.result-row').first().waitFor({ timeout: 20000 });
-    const count = await page.locator('.result-row').count();
-    await page.locator('#more-search').tap();
-    await page.waitForFunction(
-      initial => document.querySelectorAll('.result-row').length > initial,
-      count,
+    // Results come a page of at most 12 at a time; Next shows the following page.
+    assert.ok((await page.locator('.result-row').count()) <= 12);
+    await page.locator('.result-pager [data-page="next"]').first().tap();
+    await page.waitForFunction(() =>
+      /MATCH 13\b/.test(document.querySelector('.result-row small')?.textContent || ''),
     );
+    assert.ok((await page.locator('.result-row').count()) <= 12);
+    await checkLayout(page, stage);
     await page.locator('.result-row').first().tap();
     await page.locator('.result-row.is-selected').waitFor();
     assert.equal(await page.locator('#target-0').inputValue(), '#343');
