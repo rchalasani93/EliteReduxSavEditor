@@ -2821,3 +2821,99 @@ label.field > span {
     flex: 1 1 auto;
   }
 }
+/* Optimal specimen */
+.specimen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.specimen-card {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  padding: 12px 10px;
+  white-space: normal;
+  text-align: center;
+  background: var(--panel);
+}
+.specimen-card .mon-emblem,
+.specimen-title .mon-emblem {
+  width: 56px;
+  height: 56px;
+}
+.specimen-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.specimen-card .types {
+  justify-content: center;
+}
+.specimen-card .finder-abilities {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.specimen-card .finder-abilities b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.specimen-head {
+  margin-bottom: 10px;
+}
+.specimen-back {
+  border-radius: 999px;
+}
+.specimen-title {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.specimen-title h2 {
+  margin: 0;
+  font-size: 22px;
+}
+.specimen-title p {
+  margin: 2px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.specimen-pids .result-abilities b {
+  font-weight: 500;
+}
+.specimen-pids b b,
+.specimen-pids small b {
+  color: var(--accent);
+}
+.randomizer-off p {
+  margin: 0 0 10px;
+}
+@media (max-width: 600px) {
+  .specimen-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.specimen-title > div {
+  min-width: 0;
+}
+.specimen-pids .result-abilities {
+  display: grid;
+  gap: 4px;
+}
+.equipped-badge {
+  white-space: nowrap;
+}
+.ability-card .slot-name > span:first-child {
+  flex-wrap: wrap;
+}
+#finder-results,
+.specimen-detail {
+  scroll-margin-top: 76px;
+}
+@media (max-width: 600px) {
+  .specimen-detail .abilities-list {
+    grid-template-columns: 1fr;
+  }
+}

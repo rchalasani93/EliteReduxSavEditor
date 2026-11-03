@@ -799,7 +799,18 @@
     bindCatalogPickers();
   }
   // ---- Species finder: every species that can roll a set of abilities ------------------------
-  const finder = { targets: ['', '', '', ''], type: '', minTotal: 0, results: [], run: null };
+  const finder = {
+    targets: ['', '', '', ''],
+    type: '',
+    minTotal: 0,
+    results: [],
+    run: null,
+    // Optimal specimen view: results are filtered by type and paged; a card opens a detail page.
+    show: '',
+    page: 0,
+    detail: null,
+  };
+  const SPECIMENS_PER_PAGE = 24;
   function finderSpecies() {
     const battleForms = new Set();
     for (const sp of Object.values(catalog.species))
@@ -835,23 +846,183 @@
   }
   function drawFinderResults() {
     if (!$('finder-results')) return;
-    const list = finder.results
-      .slice()
-      .sort((a, b) => a.species - b.species)
-      .slice(0, 400);
+    if (finder.detail) return drawSpecimen();
     const name = id => html(catalog.abilities[id]?.name || `#${id}`);
     const wanted = new Set(finder.run?.targets || []);
     const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
-    $('finder-results').innerHTML = list.length
-      ? `<div class="result-heading"><h2>SPECIES THAT CAN HAVE THEM</h2><span>${finder.results.length.toLocaleString()} found${finder.results.length > 400 ? ' · showing the first 400' : ''}</span></div><div class="finder-list">${list
+    const all = finder.results.slice().sort((a, b) => a.species - b.species);
+    // Type chips count what was found; the chosen one filters the cards.
+    const counts = new Map();
+    for (const r of all)
+      for (const t of new Set(catalog.species[r.species].types))
+        counts.set(t, (counts.get(t) || 0) + 1);
+    if (finder.show !== '' && !counts.has(+finder.show)) finder.show = '';
+    const list =
+      finder.show === ''
+        ? all
+        : all.filter(r => catalog.species[r.species].types.includes(+finder.show));
+    const pages = Math.max(1, Math.ceil(list.length / SPECIMENS_PER_PAGE));
+    finder.page = Math.min(finder.page, pages - 1);
+    const shown = list.slice(
+      finder.page * SPECIMENS_PER_PAGE,
+      (finder.page + 1) * SPECIMENS_PER_PAGE,
+    );
+    const chips = all.length
+      ? `<div class="pocket-chips" data-specimen-types role="group" aria-label="Filter by type"><button type="button" data-show-type="" aria-pressed="${finder.show === ''}">All <small>${all.length}</small></button>${[
+          ...counts,
+        ]
+          .sort((a, b) => b[1] - a[1])
+          .map(
+            ([t, n]) =>
+              `<button type="button" data-show-type="${t}" aria-pressed="${String(+finder.show === t && finder.show !== '')}">${html(catalog.types[t])} <small>${n}</small></button>`,
+          )
+          .join('')}</div>`
+      : '';
+    const pager =
+      pages > 1
+        ? `<nav class="result-pager" aria-label="Specimen pages"><button type="button" data-specimen-page="${finder.page - 1}" ${finder.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${finder.page + 1} of ${pages}</span><button type="button" data-specimen-page="${finder.page + 1}" ${finder.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></nav>`
+        : '';
+    $('finder-results').innerHTML = all.length
+      ? `<div class="result-heading"><h2>POKÉMON THAT CAN ROLL THEM</h2><span>${all.length.toLocaleString()} found${finder.run?.busy ? ' so far' : ''} · tap one to open it</span></div>${chips}${pager}<div class="specimen-grid">${shown
           .map(r => {
             const sp = catalog.species[r.species];
-            return `<div class="finder-row">${pokemonIcon(sp)}<div class="finder-main"><b>${html(sp.name)}</b><small>#${html(sp.id)} · ${html(ERRng.gender(sp, r.pid))} · PID ${html(r.pid.toString(16).toUpperCase().padStart(8, '0'))}</small><div class="types">${typeTags(r.types)}</div></div><p class="finder-abilities">Ability ${html(r.slot + 1)}: ${mark(r.ability)}<br>Innates: ${r.innates.map(mark).join(', ')}</p><button type="button" data-finder-add="${html(r.species)}" ${save.damaged.length ? 'disabled' : ''}>Add…</button></div>`;
+            return `<button type="button" class="specimen-card" data-specimen="${html(r.species)}">${pokemonIcon(sp)}<span class="specimen-name">${html(sp.name)}</span><span class="types">${typeTags(r.types)}</span><small class="finder-abilities">${mark(r.ability)} · ${r.innates.map(mark).join(' · ')}</small></button>`;
           })
-          .join('')}</div>`
+          .join('')}</div>${pager}`
       : finder.run && !finder.run.busy && !finder.run.stopped
-        ? '<p class="notice">No species can roll all of these together with the current randomizer settings.</p>'
+        ? '<p class="notice">No Pokémon can roll all of these together with the current randomizer settings.</p>'
         : '';
+  }
+  // ---- Optimal specimen: one Pokémon's page --------------------------------------------------
+  // Its rolls with full descriptions, every other PID that gives the same set (paged, searched
+  // in a worker like the Ability lab), and Enlist, which opens Add Pokémon with that PID.
+  function openSpecimen(speciesId) {
+    const r = finder.results.find(x => x.species === speciesId);
+    if (!r) return;
+    stopSpecimenSearch();
+    finder.detail = {
+      species: speciesId,
+      pid: r.pid,
+      slot: r.slot,
+      results: [{ pid: r.pid, slot: r.slot, ability: r.ability, innates: r.innates }],
+      page: 0,
+      session: null,
+      listScroll: window.scrollY,
+    };
+    drawFinderResults();
+    $('finder-results').scrollIntoView({ block: 'start' });
+    searchSpecimenPids();
+  }
+  function closeSpecimen() {
+    stopSpecimenSearch();
+    const y = finder.detail?.listScroll ?? 0;
+    finder.detail = null;
+    drawFinderResults();
+    window.scrollTo(0, y);
+  }
+  function stopSpecimenSearch() {
+    const s = finder.detail?.session;
+    if (!s) return;
+    s.worker?.terminate();
+    if (s.url) URL.revokeObjectURL(s.url);
+    s.worker = null;
+    s.busy = false;
+    // An unfinished search restarts from where the list stands when the page is shown again.
+    if (!s.complete) finder.detail.session = null;
+  }
+  function searchSpecimenPids() {
+    const d = finder.detail;
+    if (!d || !finder.run) return;
+    let s = d.session;
+    if (!s) {
+      const targets = finder.run.targets.slice(0, 4);
+      while (targets.length < 4) targets.push(null);
+      const code =
+        $('rng-code').textContent +
+        `\nlet pages;self.onmessage=async e=>{try{if(e.data.kind!=='next')pages=ERRng.searchPages(e.data);const page=await pages.next();self.postMessage({kind:'done',value:page.value});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
+      const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      s = d.session = {
+        url,
+        worker: new Worker(url),
+        busy: false,
+        complete: false,
+        target: RESULTS_PER_PAGE * 5,
+        started: false,
+      };
+      const request = {
+        species: catalog.species[d.species],
+        options: finder.run.options,
+        config: catalog.config,
+        targets,
+        matchMode: 'any',
+        lockedSlot: null,
+        keepGender: false,
+        pid: d.pid,
+        limit: RESULTS_PER_PAGE,
+      };
+      s.worker.onmessage = e => {
+        if (finder.detail !== d) return;
+        const data = e.data;
+        s.busy = false;
+        if (data.kind === 'error') {
+          stopSpecimenSearch();
+          fail(new Error(data.message));
+          return;
+        }
+        s.complete = data.value.complete;
+        const have = new Set(d.results.map(x => `${x.pid}:${x.slot}`));
+        for (const r of data.value.answers)
+          if (!have.has(`${r.pid}:${r.slot}`))
+            d.results.push({ pid: r.pid, slot: r.slot, ability: r.ability, innates: r.innates });
+        if (s.complete) stopSpecimenSearch();
+        else if (d.results.length < s.target) {
+          s.busy = true;
+          s.worker.postMessage({ kind: 'next' });
+        }
+        drawSpecimen();
+      };
+      s.busy = true;
+      s.worker.postMessage(request);
+      return;
+    }
+    if (!s.busy && !s.complete && s.worker) {
+      s.busy = true;
+      s.worker.postMessage({ kind: 'next' });
+    }
+  }
+  function drawSpecimen() {
+    const d = finder.detail;
+    if (!d || !$('finder-results')) return;
+    const sp = catalog.species[d.species],
+      pidHex = n => n.toString(16).toUpperCase().padStart(8, '0'),
+      bst = sp.base.reduce((a, b) => a + b, 0),
+      wanted = new Set(finder.run?.targets || []),
+      s = d.session,
+      more = !!s && !s.complete,
+      pages = Math.max(1, Math.ceil(d.results.length / RESULTS_PER_PAGE));
+    d.page = Math.min(d.page, Math.max(0, pages - 1 + (more && s.busy ? 1 : 0)));
+    const first = d.page * RESULTS_PER_PAGE,
+      rows = d.results.slice(first, first + RESULTS_PER_PAGE);
+    const preview = { species: d.species, pid: d.pid, abilitySlot: d.slot };
+    const name = id => html(catalog.abilities[id]?.name || `#${id}`);
+    const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
+    $('finder-results').innerHTML =
+      `<section class="panel specimen-detail"><div class="specimen-head"><button type="button" class="specimen-back" data-specimen-back>‹ All Pokémon</button></div>
+      <div class="specimen-title">${pokemonIcon(sp)}<div><h2>${html(sp.name)}</h2><p>#${html(sp.dex || sp.id)} · ${html(ERRng.gender(sp, d.pid))} · base stat total ${bst} · PID ${pidHex(d.pid)} · ability slot ${d.slot + 1}</p><div class="types">${typeTags(sp.types)}</div></div></div>
+      ${abilityCards(preview, sp, true)}
+      <div class="form-footer"><p>Enlist creates this Pokémon with this PID: choose its nickname, level, nature, shininess, held item, moves and where it goes.</p><div class="actions-inline"><button type="button" class="primary" data-specimen-enlist ${save.damaged.length ? 'disabled' : ''}>Enlist…</button></div></div></section>
+      <section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${d.results.length.toLocaleString()}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
+      <div class="specimen-pids">${rows
+        .map((r, k) => {
+          const picked = r.pid === d.pid && r.slot === d.slot;
+          return `<button type="button" class="result-row${picked ? ' is-selected' : ''}" data-specimen-pid="${first + k}" aria-pressed="${picked}"><code><small>PID</small><br>${pidHex(r.pid)}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>${mark(r.ability)}</b><small>Innates: ${r.innates.map(mark).join(' · ')} · ${html(ERRng.gender(sp, r.pid))}</small></span><span class="result-use">${picked ? 'Shown' : 'Pick'}</span></button>`;
+        })
+        .join('')}${!rows.length && s?.busy ? '<p class="field-help">Searching…</p>' : ''}</div>
+      ${
+        pages > 1 || more
+          ? `<nav class="result-pager" aria-label="PID pages"><button type="button" data-specimen-pids-page="${d.page - 1}" ${d.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${d.page + 1} of ${pages}${more ? '+' : ''}</span><button type="button" data-specimen-pids-page="${d.page + 1}" ${d.page >= pages - 1 && !more ? 'disabled' : ''}>Next ›</button></nav>`
+          : ''
+      }</section>`;
   }
   // Worker messages are not trusted for display: keep only the species, PID and slot
   // as checked numbers and recompute the abilities and types here.
@@ -920,8 +1091,12 @@
         started: performance.now(),
         ended: 0,
       };
+      stopSpecimenSearch();
       finder.run = run;
       finder.results = [];
+      finder.detail = null;
+      finder.show = '';
+      finder.page = 0;
       for (let i = 0; i < count; i++) {
         const worker = new Worker(url);
         worker.onmessage = e => {
@@ -973,7 +1148,11 @@
     const opts = options(),
       on = opts.abilityRng || opts.innateRng;
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Species finder.</h1><p>Pick up to four abilities and innates and see every species that can have all of them at once, with a PID that does it.</p></div>${on ? `<p class="notice">Your save has the ${opts.abilityRng && opts.innateRng ? 'ability and innate randomizers' : opts.abilityRng ? 'ability randomizer' : 'innate randomizer'} on, so most species can roll most combinations. One or two abilities take seconds; three or four can take a few minutes, and results appear as they are found.</p>` : '<p class="notice">Ability and innate randomizers are off in this save, so this lists the species that have these abilities naturally.</p>'}
+      `<div class="page-heading"><h1>Optimal specimen.</h1><p>Pick up to four abilities and innates and see every Pokémon that can roll all of them at once. Open one for its rolls and every PID that gives them, then enlist it into your party or a box.</p></div>${
+        opts.abilityRng && opts.innateRng
+          ? '<p class="notice">Your save has the ability and innate randomizers on, so most Pokémon can roll most combinations. One or two abilities take seconds; three or four can take a few minutes, and results appear as they are found.</p>'
+          : `<div class="notice warning randomizer-off"><p>${on ? `Only the ${opts.abilityRng ? 'ability' : 'innate'} randomizer is on in this save` : 'The ability and innate randomizers are off in this save'}, so ${on ? 'fewer Pokémon can roll these' : 'this lists only the Pokémon that have these abilities naturally'}. Both are game options; turn them on here to match a randomized run.</p><div class="actions-inline">${opts.abilityRng ? '' : `<button type="button" data-enable-rng="abilityRng" ${save.damaged.length ? 'disabled' : ''}>Turn on ability randomizer</button>`}${opts.innateRng ? '' : `<button type="button" data-enable-rng="innateRng" ${save.damaged.length ? 'disabled' : ''}>Turn on innate randomizer</button>`}</div></div>`
+      }
     <section class="panel"><div class="panel-heading"><h2>WHAT YOU WANT</h2><span>Any order · abilities and innates</span></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span>Ability ${i + 1}</span><input id="finder-target-${i}" list="list-abilities" placeholder="${i ? 'Optional' : 'Required'}" autocomplete="off"></label>`).join('')}</div>
     <div class="field-grid" style="margin-top:16px"><label class="field"><span>Type</span><select id="finder-type"><option value="">Any type</option>${catalog.types
       .map((t, i) =>
@@ -1000,14 +1179,62 @@
       finderStatus();
       drawFinderResults();
     };
+    document.querySelectorAll('[data-enable-rng]').forEach(
+      b =>
+        (b.onclick = () => {
+          if (!guard()) return;
+          apply(
+            () => save.editOptions({ [b.dataset.enableRng]: 1 }),
+            `${b.dataset.enableRng === 'abilityRng' ? 'Ability' : 'Innate'} randomizer turned on. Search again to use it.`,
+          );
+        }),
+    );
     $('finder-results').onclick = e => {
-      const button = e.target.closest('[data-finder-add]');
-      if (!button) return;
-      const r = finder.results.find(x => x.species === +button.dataset.finderAdd);
-      if (r) openAddDialog({ species: r.species, pid: r.pid, abilitySlot: r.slot });
+      const t = e.target;
+      const card = t.closest('[data-specimen]');
+      if (card) return openSpecimen(+card.dataset.specimen);
+      const type = t.closest('[data-show-type]');
+      if (type) {
+        finder.show = type.dataset.showType;
+        finder.page = 0;
+        return drawFinderResults();
+      }
+      const page = t.closest('[data-specimen-page]');
+      if (page) {
+        finder.page = Math.max(0, +page.dataset.specimenPage);
+        drawFinderResults();
+        return $('finder-results').scrollIntoView({ block: 'start' });
+      }
+      if (t.closest('[data-specimen-back]')) return closeSpecimen();
+      const d = finder.detail;
+      if (!d) return;
+      const pick = t.closest('[data-specimen-pid]');
+      if (pick) {
+        const r = d.results[+pick.dataset.specimenPid];
+        d.pid = r.pid;
+        d.slot = r.slot;
+        drawSpecimen();
+        return document.querySelector('.specimen-detail').scrollIntoView({ block: 'start' });
+      }
+      const pidPage = t.closest('[data-specimen-pids-page]');
+      if (pidPage) {
+        d.page = Math.max(0, +pidPage.dataset.specimenPidsPage);
+        if (
+          d.session &&
+          !d.session.complete &&
+          (d.page + 1) * RESULTS_PER_PAGE > d.results.length
+        ) {
+          d.session.target = Math.max(d.session.target, (d.page + 5) * RESULTS_PER_PAGE);
+          searchSpecimenPids();
+        }
+        return drawSpecimen();
+      }
+      if (t.closest('[data-specimen-enlist]'))
+        openAddDialog({ species: d.species, pid: d.pid, abilitySlot: d.slot });
     };
     drawFinderResults();
     finderStatus();
+    if (finder.detail && !finder.detail.session) searchSpecimenPids();
   }
   // ---- Move details ----------------------------------------------------------------------------
   const openMoveDetails = new Set();
@@ -1082,7 +1309,7 @@
       `${heading(m)}${monActions()}<nav class="jump-links" aria-label="Jump to a section"><button type="button" data-jump="pokemon-abilities">Abilities</button><button type="button" data-jump="identity-panel">Details</button><button type="button" data-jump="stats-panel">Stats & EVs</button><button type="button" data-jump="moves-panel">Moves</button><button type="button" data-jump="more-details">More details</button></nav><div class="ability-overview" id="pokemon-abilities">${abilityCards(m)}</div><form id="pokemon-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="border:0;padding:0;margin:0">
     <section class="panel" id="identity-panel"><div class="panel-heading"><h2>IDENTITY & DETAILS</h2><span>PID ${m.pid.toString(16).toUpperCase().padStart(8, '0')}</span></div><div class="field-grid">
     ${catalogField('Species', 'species', 'species', m.species)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" value="${html(m.nickname)}" maxlength="12" required></label>${numberField(`Level · current cap ${save.cap()}`, 'level', m.level, 1, 100)}
-    ${selectField('Nature', 'nature', m.nature, catalog.natures)}${catalogField('Held item', 'heldItem', 'items', m.heldItem)}${selectField(
+    ${selectField('Shininess', 'shiny', m.shiny, SHININESS)}${selectField('Nature', 'nature', m.nature, catalog.natures)}${catalogField('Held item', 'heldItem', 'items', m.heldItem)}${selectField(
       'Equipped ability',
       'abilitySlot',
       m.abilitySlot,
@@ -1090,7 +1317,7 @@
         (id, i) => `Slot ${i + 1}: ${catalog.abilities[id]?.name || `#${id}`}`,
       ),
     )}
-    ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}${selectField('Shininess', 'shiny', m.shiny, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}
+    ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}
     </div><p class="field-help" id="held-item-desc">${heldItemText(m.heldItem)}</p><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
     ${ref.kind === 'party' ? conditionPanel(m) : ''}
     <div class="two-columns"><section class="panel" id="stats-panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label, i) => `<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100, s.base[i] / 2.55)}%"></i></div></td><td>${(options().difficulty === 3 && save.flag(2893)) || (i === 5 && m.speedDown) ? 0 : 31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a, b) => a + b, 0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs ? 'enabled' : 'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind === 'party' ? `HP ${m.hp}/${m.stats[0]}.` : 'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
@@ -1530,7 +1757,7 @@
       'Creates a new Pokémon with you as its original trainer.',
       `<div class="tab-switch" role="tablist"><button type="button" role="tab" class="active" data-mode="new">Build</button><button type="button" role="tab" data-mode="import">Paste Showdown set</button></div>
     <form data-pane="new" class="add-form"><div class="field-grid two-up"><label class="field"><span>Species</span><input name="species" list="list-species" value="${html(display(catalog.species[start]))}" autocomplete="off" required></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}
-    <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}</div>
+    <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" maxlength="12" placeholder="Species name" autocomplete="off"></label><label class="field"><span>Held item</span><input name="heldItem" list="list-items" placeholder="None" autocomplete="off"></label></div>
     ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label>`).join('')}</div></form>
     <div data-pane="import" hidden><textarea class="set-text" rows="9" placeholder="Garchomp @ Life Orb&#10;Ability: Sand Force&#10;Level: 100&#10;EVs: 252 Atk / 4 SpD / 252 Spe&#10;Jolly Nature&#10;- Earthquake&#10;- Dragon Claw" aria-label="Showdown set"></textarea><p class="field-help" data-import-help>Species, item, level, EVs, nature, shininess, happiness and moves are imported. Abilities come from the PID: if the requested ability is not one of the new Pokémon’s choices, the Ability lab opens with it filled in.</p></div>
     <p class="section-label">Where should it go?</p>${destinationFields()}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
@@ -1574,7 +1801,7 @@
         options(),
         catalog.config,
       );
-      note.textContent = `Uses PID ${found.pid.toString(16).toUpperCase().padStart(8, '0')} from the species finder: ${catalog.abilities[r.ability]?.name} with ${r.innates.map(id => catalog.abilities[id]?.name).join(', ')}.`;
+      note.textContent = `Uses PID ${found.pid.toString(16).toUpperCase().padStart(8, '0')} from Optimal specimen: ${catalog.abilities[r.ability]?.name} with ${r.innates.map(id => catalog.abilities[id]?.name).join(', ')}.`;
     };
     foundNote();
     form.elements.species.addEventListener('input', foundNote);
@@ -1609,6 +1836,10 @@
             moves,
             shiny: +form.elements.shiny.value,
           };
+          const nickname = form.elements.nickname.value.trim(),
+            heldItem = form.elements.heldItem.value.trim();
+          if (nickname) options.nickname = ERCore.sanitizeName(nickname, 12);
+          if (heldItem) options.heldItem = resolve('items', heldItem);
           if (usesFound())
             Object.assign(options, { pid: found.pid, abilitySlot: found.abilitySlot });
           if (natureValue !== 'random') options.nature = +natureValue;
@@ -3750,7 +3981,10 @@
       (e.onclick = () => {
         if (!guard(() => e.click())) return;
         resetSearch();
-        if (e.dataset.tab !== 'finder') stopFinder();
+        if (e.dataset.tab !== 'finder') {
+          stopFinder();
+          stopSpecimenSearch();
+        }
         tab = e.dataset.tab;
         render();
       }),
