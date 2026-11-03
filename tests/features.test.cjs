@@ -397,3 +397,142 @@ test('2.65.4.11b data changes the randomizer modulus and its results', () => {
     'Daredevil',
   ]);
 });
+
+test('adding many Pokémon fills empty PC slots in one undo step and records them as caught', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.bytes.slice();
+  const species = Object.values(catalog.species)
+    .filter(sp => sp.id >= 1 && sp.id <= 1504 && core.baseSpeciesName(catalog, sp) === sp.name)
+    .slice(0, 900);
+  const free = Array.from({ length: 26 }, (_, b) => s.box(b).filter(m => !m.species).length).reduce(
+    (a, n) => a + n,
+  );
+  const added = s.createMany(
+    species.map(sp => ({ species: sp.id, level: 20, moves: [1] })),
+    { startBox: 3 },
+  );
+  assert.equal(added, Math.min(free, species.length));
+  assert.equal(s.history.length, 1);
+  assert.ok(s.box(3)[0].species, 'starts in the chosen box');
+  const reopened = new core.Save(s.export(), catalog);
+  for (const m of reopened.allMons()) reopened.assertMon(m);
+  assert.ok(reopened.pokedex().caught(species[0].id));
+  s.undo();
+  assert.ok(s.bytes.every((b, i) => b === before[i]));
+});
+
+test('catalog marks ordinary evolutions so final stages can be picked', () => {
+  const by = name => Object.values(catalog.species).find(s => s.name === name);
+  const final = name => !by(name).evolves?.length;
+  for (const name of [
+    'Venusaur',
+    'Vileplume',
+    'Bellossom',
+    'Vaporeon',
+    'Sylveon',
+    'Kecleon',
+    'Shedinja',
+  ])
+    assert.ok(final(name), `${name} should be final`);
+  for (const name of ['Bulbasaur', 'Ivysaur', 'Gloom', 'Eevee', 'Wurmple', 'Silcoon'])
+    assert.ok(!final(name), `${name} should evolve`);
+  assert.equal(by('Eevee').evolves.length, 8);
+  // Mega Evolution is not an evolution stage.
+  assert.ok(!by('Venusaur').evolves);
+});
+
+test('Pokédex uses national numbers, not species IDs', () => {
+  const by = name => Object.values(catalog.species).find(s => s.name === name);
+  // Elite Redux numbers its later species apart from their IDs; forms share the base entry.
+  assert.equal(core.dexNumber(catalog, by('Bulbasaur').id), 1);
+  assert.equal(core.dexNumber(catalog, by('Grotom').id), 1128);
+  assert.equal(core.dexNumber(catalog, by('Cascoon Primal').id), by('Cascoon').id);
+  const list = core.pokedexList(catalog);
+  assert.equal(list.length, new Set(list.map(e => e.no)).size);
+  assert.equal(list.find(e => e.no === 268).species.name, 'Cascoon');
+  assert.ok(!list.some(e => e.no === 1071), '#1071 has no Pokémon');
+
+  const s = new core.Save(fixture(), catalog);
+  assert.throws(() => s.editPokedex({ 1071: 'caught' }), /1071/);
+  s.createMany([{ species: by('Grotom').id, level: 5, moves: [1] }]);
+  assert.ok(s.pokedex().caught(1128));
+  assert.ok(!s.pokedex().caught(by('Grotom').id));
+});
+
+test('Pokédex numbers no Pokémon has are found and cleared', () => {
+  const s = new core.Save(fixture(), catalog);
+  assert.deepEqual(s.pokedex().orphans(), []);
+  s.editPokedex({ 1128: 'caught' });
+  // Without Grotom (#1128) in the game data, its entry becomes one the game can't show.
+  const species = Object.fromEntries(
+    Object.entries(catalog.species).filter(([, sp]) => sp.dex !== 1128),
+  );
+  const t = new core.Save(s.export(), { ...catalog, species });
+  assert.deepEqual(t.pokedex().orphans(), [1128]);
+  assert.deepEqual(t.clearPokedexOrphans(), [1128]);
+  assert.deepEqual(t.pokedex().orphans(), []);
+  assert.ok(!t.pokedex().seen(1128));
+});
+
+test('Pokédex stays within the 999 seen the game can draw', () => {
+  const s = new core.Save(fixture(), catalog),
+    list = core.pokedexList(catalog);
+  const all = Object.fromEntries(list.map(e => [e.no, 'caught']));
+  assert.throws(() => s.editPokedex(all), /1,000/);
+  const first = Object.fromEntries(list.slice(0, 999).map(e => [e.no, 'caught']));
+  s.editPokedex(first);
+  assert.equal(s.pokedex().counts().seen, 999);
+  // Bulk adds still place the Pokémon but leave the Pokédex at 999.
+  const extra = list.slice(999, 1001).map(e => ({ species: e.species.id, level: 5, moves: [1] }));
+  assert.equal(s.createMany(extra), 2);
+  assert.equal(s.lastPokedexSkipped.length, 2);
+  assert.equal(s.pokedex().counts().seen, 999);
+
+  // A save already over the limit (edited elsewhere) can be trimmed back.
+  const t = new core.Save(fixture(), { ...catalog });
+  t.editPokedex(first);
+  const raw = t.export();
+  const u = new core.Save(raw, catalog);
+  u.editPokedex({ [list[0].no]: 'none' }); // reductions are always allowed
+  assert.equal(u.pokedex().counts().seen, 998);
+  assert.deepEqual(u.trimPokedex(), []);
+});
+
+test('Add many can leave the Pokédex untouched', () => {
+  const s = new core.Save(fixture(), catalog),
+    before = s.pokedex().counts();
+  const list = core
+    .pokedexList(catalog)
+    .slice(0, 40)
+    .map(e => ({ species: e.species.id, level: 5, moves: [1] }));
+  assert.equal(s.createMany(list, { recordDex: false }), 40);
+  assert.deepEqual(s.pokedex().counts(), before);
+});
+
+test('2.65.5.2b data: ROM-checked randomizer config, new species and abilities', () => {
+  const patches = require('../src/catalog-patches.json');
+  const rng = require('../src/rng.js');
+  const v5 = core.applyCatalogPatch(catalog, patches['2.65.5.2b']);
+  // 1,084 abilities (IDs 0-1083); the ROM bans Versatile (1079) from the randomizer too.
+  assert.equal(v5.config.modulus, 1083);
+  assert.equal(v5.abilities[1083].name, 'High Rise');
+  assert.equal(v5.config.banned.length, 39);
+  assert.ok(v5.config.banned.includes(1079));
+  // New species at the end, two reused slots, existing IDs unchanged.
+  assert.equal(v5.species[2334].name, 'Cauldrican');
+  assert.equal(v5.species[2126].key, 'SPECIES_AMICABULL');
+  assert.equal(v5.species[150].name, 'Mewtwo');
+  // Abilities come from the ROM where Nextdex's 2.65.5 data points at neighbouring IDs.
+  const swoobat = Object.values(v5.species).find(s => s.name === 'Swoobat');
+  assert.equal(v5.abilities[swoobat.abilities[0]].name, 'Echolocation');
+  // Miraidon at PID 7B007685, slot 2, from a 2.65.5.2b save with both randomizers on.
+  const options = { abilityRng: 1, innateRng: 1, typeRng: 0 };
+  const r = rng.evaluate(v5.species[1008], 0x7b007685, 1, options, v5.config);
+  assert.equal(v5.abilities[r.ability].name, 'Archer');
+  assert.deepEqual(
+    r.innates.map(id => v5.abilities[id].name),
+    ['Stalwart', 'Libero', 'Technician'],
+  );
+  // The new items carry their bag pocket.
+  assert.equal(v5.items[440].pocket, 'mega');
+});

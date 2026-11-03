@@ -16,6 +16,23 @@
     </style>
   </head>
   <body>
+    <div
+      id="analytics-consent"
+      class="analytics-consent"
+      role="region"
+      aria-label="Usage statistics"
+      hidden
+    >
+      <p>
+        Allow anonymous usage statistics (Google Analytics page views) to help improve the editor?
+        Your save and your edits never leave this device.
+        <button type="button" class="link-button" id="analytics-more">Privacy details</button>
+      </p>
+      <div class="actions-inline">
+        <button type="button" id="analytics-no">No thanks</button
+        ><button type="button" class="primary" id="analytics-yes">Allow</button>
+      </div>
+    </div>
     <header class="topbar">
       <a class="brand" href="#" aria-label="Redux Save Studio home"
         ><span class="brand-mark" aria-hidden="true">R</span
@@ -80,6 +97,11 @@
             Name, IDs, play time, money, coins, Battle Points, box names and wallpapers, and every
             item in your bag.
           </dd>
+          <dt>Story</dt>
+          <dd>
+            Badges, gym leaders and becoming Champion, replayed from the game's own event scripts,
+            plus every story flag and variable.
+          </dd>
           <dt>Progress</dt>
           <dd>
             Pokédex seen and caught, game stats, nuzlocke route tracking and the in-game clock.
@@ -108,14 +130,16 @@
             <button id="open-button" class="quiet">Open another</button
             ><button id="backup-button" class="quiet">Original backup</button
             ><button id="undo-button" class="icon-button" title="Undo (Ctrl+Z)" aria-label="Undo">
-              Undo</button
+              <span class="btn-icon" aria-hidden="true">↶</span
+              ><span class="btn-text">Undo</span></button
             ><button
               id="redo-button"
               class="icon-button"
               title="Redo (Ctrl+Shift+Z)"
               aria-label="Redo"
             >
-              Redo</button
+              <span class="btn-icon" aria-hidden="true">↷</span
+              ><span class="btn-text">Redo</span></button
             ><button id="export-button" class="primary">Export .sav</button>
           </div>
         </div>
@@ -147,7 +171,7 @@
                 ><input
                   id="roster-filter"
                   type="search"
-                  placeholder="Search by species, nickname or type"
+                  placeholder="Search Pokémon"
                   aria-label="Search Pokémon by species, nickname or type"
                   autocomplete="off"
               /></label>
@@ -167,7 +191,7 @@
               ><button data-tab="randomizer">Ability lab</button
               ><button data-tab="finder">Species finder</button
               ><button data-tab="trainer">Trainer & bag</button
-              ><button data-tab="progress">Progress</button
+              ><button data-tab="progress">Progress</button><button data-tab="story">Story</button
               ><button data-tab="settings">Game settings</button
               ><button data-tab="review">Review & export <span id="change-count">0</span></button>
             </nav>
@@ -176,7 +200,7 @@
         </div>
       </section>
       <footer>
-        <span>REDUX SAVE STUDIO <span class="muted">/ v1.7.0</span></span
+        <span>REDUX SAVE STUDIO <span class="muted">/ v1.9.0</span></span
         ><span class="footer-links"
           ><button id="privacy-button" class="text-button">Privacy</button
           ><button id="terms-button" class="text-button">Terms</button></span
@@ -213,11 +237,11 @@
         randomized combination, use Ability lab with the corresponding randomizers enabled.
       </p>
       <p>
-        Species, move and ability data is bundled for Elite Redux 2.65.4 (also used by 2.65.4.1b)
-        and 2.65.4.11b, from ER Nextdex. A save does not identify its ROM build, so choose your
-        version next to the file name: every randomized ability and innate depends on it, because
-        each build has a different number of abilities. Other builds can import their own Nextdex
-        JSON in Game settings.
+        Species, move and ability data is bundled for Elite Redux 2.65.4 (also used by 2.65.4.1b),
+        2.65.4.11b and 2.65.5.2b, from ER Nextdex and checked against the game. A save does not
+        identify its ROM build, so choose your version next to the file name: every randomized
+        ability and innate depends on it, because each build has a different number of abilities.
+        Other builds can import their own Nextdex JSON in Game settings.
       </p>
       <p class="sources">
         Game definitions:
@@ -243,11 +267,29 @@
         and edited saves) are created on your own device.
       </p>
       <h3>What the editor collects</h3>
-      <p>
+      <p data-analytics="off">
         Nothing. There are no accounts, cookies, analytics, ads or tracking scripts, and the page
         makes no network requests after it loads. Pokémon artwork and game data are built into the
         page.
       </p>
+      <div data-analytics="on" hidden>
+        <p>
+          Only if you allow it: anonymous usage statistics through Google Analytics, to see how many
+          people use the editor. It records page views with your browser, device type, approximate
+          country and the site that referred you, and sets Google Analytics cookies. Nothing about
+          your save, your Pokémon or your edits is ever sent. Advertising features and Google
+          signals are turned off.
+        </p>
+        <p>
+          If you choose No, Google Analytics is never loaded and the page makes no network requests
+          after it loads. Your choice is kept in this browser.
+          <button type="button" id="analytics-change">Change my choice</button>
+        </p>
+        <p>
+          There are no accounts or ads. Pokémon artwork and game data are built into the page. The
+          downloaded offline editor never includes analytics.
+        </p>
+      </div>
       <h3>Hosting</h3>
       <p>
         The online version is served by GitHub Pages. GitHub may log basic request information such
@@ -297,6 +339,12 @@
     </script>
     <script id="rng-code">
       /* RNG */
+    </script>
+    <script id="story-data" type="application/json">
+      /* STORY_DATA */
+    </script>
+    <script id="story-code">
+      /* STORY */
     </script>
     <script id="html-code">
       /* HTML */

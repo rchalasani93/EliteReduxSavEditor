@@ -54,12 +54,19 @@
   // (its berry trees are 8 bytes and extra SaveBlock1/2 data shifts later fields), so each one was anchored to
   // recognisable data: game stats = save counter + steps, Pokédex caught ⊆ seen and matching owned species,
   // roamer species directly before the Pokédex, quest/nuzlocke tail ending with the start-menu item count.
+  // Event flags (FLAGS_COUNT 6135 in Elite Redux, so 767 bytes) and the story variables
+  // that follow them in save block 1.
+  const FLAGS = 3 * DATA + 0x984,
+    FLAG_BYTES = 767;
   const VARS = SB1 + 0x1c78,
     GAME_STATS = SB1 + 0x1e78,
     ROAMER = SB1 + 0x2e40,
     DEX_SEEN = SB1 + 0x2e54,
     DEX_CAUGHT = SB1 + 0x2f10,
-    DEX_BYTES = 188;
+    DEX_BYTES = 188,
+    // The game's Pokédex draws its seen and caught totals as three digit sprites with
+    // frames for 0-9 only; at 1,000 the hundreds digit reads past that table and crashes.
+    DEX_LIMIT = 999;
   const CLOCK_OFFSET = 0x24,
     CARD_BATTLE_POINTS = 0xc16,
     NUZLOCKE_CAPTURES = 0xc9c,
@@ -432,9 +439,50 @@
     const parts = species.key.split('_');
     for (let n = parts.length - 1; n >= 2; n--) {
       const base = index.get(parts.slice(0, n).join('_'));
-      if (base) return base.name;
+      // A form shares its base's Pokédex number; Porygon-Z (SPECIES_PORYGON_Z) is not a Porygon.
+      if (base && (species.dex === undefined || base.dex === species.dex)) return base.name;
     }
     return species.name;
+  }
+  // The Pokédex is indexed by national number, which in Elite Redux differs from the
+  // species ID for later species and is shared by forms. Profiles without numbers (old
+  // imports) fall back to the base species ID, which matches up to Gen 9.
+  const popcount = b => {
+    let n = 0;
+    for (; b; b &= b - 1) n++;
+    return n;
+  };
+  function dexNumber(catalog, id) {
+    const species = catalog.species[id];
+    if (!species) return 0;
+    if (species.dex !== undefined) return species.dex;
+    const base = baseSpeciesName(catalog, species);
+    if (base === species.name) return species.id;
+    return Object.values(catalog.species).find(s => s.name === base)?.id || 0;
+  }
+  // One entry per Pokédex number, shown as its base species.
+  const dexListCache = new WeakMap();
+  function pokedexList(catalog) {
+    let list = dexListCache.get(catalog);
+    if (list) return list;
+    const byNo = new Map();
+    for (const s of Object.values(catalog.species)) {
+      const no = dexNumber(catalog, s.id);
+      if (!(no > 0) || no > DEX_BYTES * 8) continue;
+      const current = byNo.get(no),
+        base = baseSpeciesName(catalog, s) === s.name;
+      if (
+        !current ||
+        (base && !current.base) ||
+        (base === current.base && s.id < current.species.id)
+      )
+        byNo.set(no, { no, species: s, base });
+    }
+    list = [...byNo.values()]
+      .sort((a, b) => a.no - b.no)
+      .map(({ no, species }) => ({ no, species }));
+    dexListCache.set(catalog, list);
+    return list;
   }
   class Save {
     constructor(input, catalog) {
@@ -574,8 +622,76 @@
       return new DataView(this.read(VARS + id * 2, 2).buffer).getUint16(0, true);
     }
     flag(id) {
-      const x = 3 * DATA + 0x984 + (id >>> 3);
+      const x = FLAGS + (id >>> 3);
       return (this.read(x, 1)[0] >>> (id & 7)) & 1;
+    }
+    // Story state: event flags, story variables (0x4000-0x40FF), items, gift Pokémon and the
+    // Hall of Fame bookkeeping, written together as one undoable edit.
+    applyStory(plan, label = 'Edit story progress') {
+      this.transact(label, () => {
+        const flagBytes = this.read(FLAGS, FLAG_BYTES);
+        for (const [id, on] of plan.flags || []) {
+          integer(id, 0, FLAG_BYTES * 8 - 1, 'Flag');
+          if (on) flagBytes[id >>> 3] |= 1 << (id & 7);
+          else flagBytes[id >>> 3] &= ~(1 << (id & 7));
+        }
+        this.write(FLAGS, flagBytes);
+        for (const [id, value] of plan.vars || []) {
+          integer(id, 0x4000, 0x40ff, 'Variable');
+          const a = new Uint8Array(2);
+          new DataView(a.buffer).setUint16(0, integer(value, 0, 0xffff, 'Variable value'), true);
+          this.write(VARS + (id - 0x4000) * 2, a);
+        }
+        const items = plan.items || [];
+        if (items.length) this.editItems(Object.fromEntries(items.map(id => [id, true])));
+        const dex = [];
+        for (const gift of plan.gifts || []) {
+          const sp = this.catalog.species[gift.species];
+          if (!sp) throw new Error('A gift Pokémon is not in this game data.');
+          const level = gift.level || Math.max(1, ...this.party().map(m => m.level));
+          const target =
+            this.partyCount < 6 ? { kind: 'party', slot: this.partyCount } : this.firstEmptyBox(0);
+          if (!target)
+            throw new Error('There is no room in your party or PC for the gift Pokémon.');
+          const slots = [0, 1, 2].filter(i => sp.abilities[i]);
+          const abilitySlot = slots.includes(gift.abilityNum)
+            ? gift.abilityNum
+            : (slots[randomInt(slots.length)] ?? 0);
+          // The game lists EVs as HP, Attack, Defense, Speed, Sp. Atk, Sp. Def.
+          const [hp, atk, def, spe, spa, spd] = gift.evs.map(n => (n === 255 ? 0 : n));
+          this.createMon(target, {
+            species: sp.id,
+            level,
+            heldItem: this.catalog.items[gift.item] ? gift.item : 0,
+            ball: gift.ball > 0 && gift.ball <= 31 ? gift.ball : 4,
+            nature: gift.nature >= 0 && gift.nature < 25 ? gift.nature : undefined,
+            abilitySlot,
+            evs: [hp, atk, def, spa, spd, spe],
+            moves: gift.moves.filter(id => id && this.catalog.moves[id]),
+            shiny: gift.shiny ? 1 : 0,
+          });
+          dex.push(dexNumber(this.catalog, sp.id));
+        }
+        this.catchInPokedex(dex);
+        if (plan.champion) {
+          const key = this.encryptionKey(),
+            stat = id =>
+              (new DataView(this.read(GAME_STATS + id * 4, 4).buffer).getUint32(0, true) ^ key) >>>
+              0,
+            setStat = (id, n) => {
+              const a = new Uint8Array(4);
+              new DataView(a.buffer).setUint32(0, (n ^ key) >>> 0, true);
+              this.write(GAME_STATS + id * 4, a);
+            };
+          // GAME_STAT_FIRST_HOF_PLAY_TIME and GAME_STAT_ENTERED_HOF, as the game records them.
+          if (!stat(1)) {
+            const t = this.trainerCard();
+            setStat(1, (Math.min(t.hours, 999) << 16) | (t.minutes << 8) | t.seconds);
+          }
+          setStat(10, Math.min(999, stat(10) + 1));
+          this.healParty();
+        }
+      });
     }
     badge() {
       if (this.flag(2885)) return 9;
@@ -592,17 +708,22 @@
       ][opts.levelCaps][this.badge()];
     }
     transact(label, fn) {
+      // A transaction inside another one joins it, so a combined edit undoes as one step.
+      if (this.inTransaction) return fn();
       if (this.damaged.length)
         throw new Error(
           'Editing is disabled because this save has a failed checksum. Restore an undamaged backup.',
         );
       const before = this.bytes.slice();
+      this.inTransaction = true;
       try {
         fn();
         this.rechecksum();
       } catch (error) {
         this.bytes = before;
         throw error;
+      } finally {
+        this.inTransaction = false;
       }
       if (!this.bytes.some((b, i) => b !== before[i])) return;
       this.undoStack.push({ bytes: before, label });
@@ -930,12 +1051,64 @@
           }
           return { seen: s, caught: c };
         },
+        // Numbers marked seen or caught that no Pokémon has: the game shows them as blank
+        // entries, and they still count toward the 999-seen limit.
+        limit: DEX_LIMIT,
+        orphans: () => {
+          const valid = new Set(pokedexList(this.catalog).map(e => e.no)),
+            out = [];
+          for (let n = 1; n <= DEX_BYTES * 8; n++)
+            if ((bit(seen, n) || bit(caught, n)) && !valid.has(n)) out.push(n);
+          return out;
+        },
       };
     }
+    clearPokedexOrphans() {
+      const orphans = this.pokedex().orphans();
+      if (orphans.length) this.editPokedex(Object.fromEntries(orphans.map(n => [n, 'none'])));
+      return orphans;
+    }
+    // Records Pokémon as caught without passing the game's 999-seen limit. Returns the
+    // Pokédex numbers that had to be left out.
+    catchInPokedex(numbers) {
+      const d = this.pokedex();
+      let seenCount = d.counts().seen;
+      const changes = {},
+        skipped = [];
+      for (const no of new Set(numbers)) {
+        if (!no || d.caught(no)) continue;
+        if (!d.seen(no)) {
+          if (seenCount >= DEX_LIMIT) {
+            skipped.push(no);
+            continue;
+          }
+          seenCount++;
+        }
+        changes[no] = 'caught';
+      }
+      if (Object.keys(changes).length) this.editPokedex(changes);
+      return skipped;
+    }
+    // Unmarks the highest-numbered entries until no more than 999 are seen.
+    trimPokedex() {
+      const d = this.pokedex();
+      let over = d.counts().seen - DEX_LIMIT;
+      const removed = [];
+      for (let n = DEX_BYTES * 8; n >= 1 && over > 0; n--)
+        if (d.seen(n)) {
+          removed.push(n);
+          over--;
+        }
+      if (removed.length) this.editPokedex(Object.fromEntries(removed.map(n => [n, 'none'])));
+      return removed.reverse();
+    }
     editPokedex(changes) {
+      const valid = new Set(pokedexList(this.catalog).map(e => e.no));
       this.transact('Edit Pokédex', () => {
         const seen = this.read(DEX_SEEN, DEX_BYTES),
-          caught = this.read(DEX_CAUGHT, DEX_BYTES);
+          caught = this.read(DEX_CAUGHT, DEX_BYTES),
+          countSeen = () => seen.reduce((t, b) => t + popcount(b), 0),
+          before = countSeen();
         const set = (a, n, v) => {
           const i = (n - 1) >>> 3,
             m = 1 << ((n - 1) & 7);
@@ -946,9 +1119,18 @@
           const n = integer(+key, 1, DEX_BYTES * 8, 'Pokédex number');
           if (!['none', 'seen', 'caught'].includes(state))
             throw new Error('Pokédex state must be none, seen or caught.');
+          if (state !== 'none' && !valid.has(n))
+            throw new Error(
+              `No Pokémon has Pokédex number ${n}, so the game would show a blank entry.`,
+            );
           set(seen, n, state !== 'none');
           set(caught, n, state === 'caught');
         }
+        const after = countSeen();
+        if (after > DEX_LIMIT && after > before)
+          throw new Error(
+            `This would make ${after} Pokémon seen. The game's Pokédex crashes at 1,000 or more, so keep it to ${DEX_LIMIT}.`,
+          );
         this.write(DEX_SEEN, seen);
         this.write(DEX_CAUGHT, caught);
       });
@@ -1179,7 +1361,10 @@
       let nick = o.nickname;
       if (nick === undefined) nick = sanitizeName(baseSpeciesName(this.catalog, species), 12);
       a.set(encode(nick, 12), 38);
-      a[50] = 4 | ((o.speedDown ? 1 : 0) << 5) | ((o.otGender ?? t.gender) << 6);
+      a[50] =
+        integer(o.ball ?? 4, 0, 31, 'Poké Ball') |
+        ((o.speedDown ? 1 : 0) << 5) |
+        ((o.otGender ?? t.gender) << 6);
       a[30] = o.metLocation ?? 0xff;
       const hpType =
         o.hpType ?? [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18][randomInt(18)];
@@ -1289,6 +1474,30 @@
         this.placeRecord(ref, this.newRecord(options));
         placed = ref;
         this.assertMon(this.mon(ref));
+      });
+      return placed;
+    }
+    // Adds many Pokémon to the first empty PC slots from startBox on, as one undoable edit,
+    // and records them as caught. Stops when the PC is full; returns how many were added.
+    createMany(list, { startBox = 0, recordDex = true } = {}, label = 'Add Pokémon to the PC') {
+      let placed = 0;
+      this.transact(label, () => {
+        const dex = [],
+          free = [];
+        for (let i = 0; i < 26; i++) {
+          const box = (startBox + i) % 26;
+          for (let slot = 0; slot < 30; slot++)
+            if (!this.mon({ kind: 'box', box, slot }).species)
+              free.push({ kind: 'box', box, slot });
+        }
+        for (const options of list) {
+          const target = free.shift();
+          if (!target) break;
+          this.placeRecord(target, this.newRecord(options));
+          dex.push(dexNumber(this.catalog, options.species));
+          placed++;
+        }
+        this.lastPokedexSkipped = recordDex ? this.catchInPokedex(dex) : [];
       });
       return placed;
     }
@@ -1618,6 +1827,8 @@
     toShowdown,
     parseShowdown,
     baseSpeciesName,
+    dexNumber,
+    pokedexList,
     sanitizeName,
     STATUS,
     LANGUAGES,

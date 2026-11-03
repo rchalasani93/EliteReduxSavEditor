@@ -4,11 +4,15 @@
     html = ERHtml.escape;
   const builtin = JSON.parse($('catalog').textContent);
   // Each bundled game version: the base data, plus newer builds applied as patches over it.
-  const GAME_VERSIONS = { '2.65.4.11b': '2.65.4.11b (latest)', '2.65.4': '2.65.4 / 2.65.4.1b' };
+  const GAME_VERSIONS = {
+    '2.65.5.2b': '2.65.5.2b (latest)',
+    '2.65.4.11b': '2.65.4.11b',
+    '2.65.4': '2.65.4 / 2.65.4.1b',
+  };
   const bundled = { '2.65.4': builtin };
   for (const [version, patch] of Object.entries(JSON.parse($('catalog-patches').textContent)))
     bundled[version] = ERCore.applyCatalogPatch(builtin, patch);
-  const LATEST_VERSION = '2.65.4.11b';
+  const LATEST_VERSION = '2.65.5.2b';
   function rememberedVersion() {
     try {
       return localStorage.getItem('er-game-version');
@@ -70,6 +74,8 @@
     pickerEntries = [],
     catalogEntries = {},
     catalogControlId = 0;
+  // Every word of the query must appear, in any order: "primal cascoon" finds Cascoon Primal.
+  const matchesQuery = (text, query) => query.split(/\s+/).every(word => text.includes(word));
   const touchLayout = () => window.matchMedia('(max-width: 760px), (any-pointer: coarse)').matches;
   const catalogLabel = kind =>
     ({ species: 'species', moves: 'move', abilities: 'ability', items: 'item' })[kind] || kind;
@@ -196,7 +202,8 @@
           name = document.createElement('b'),
           detail = document.createElement('small');
         name.textContent = entry.value.name;
-        detail.textContent = `#${entry.value.id}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
+        const no = entry.value.key && ERCore.dexNumber(catalog, entry.value.id);
+        detail.textContent = `#${entry.value.id}${no && no !== entry.value.id ? ` · Pokédex #${no}` : ''}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
         text.append(name, detail);
         button.append(text);
         button.onclick = () => {
@@ -215,7 +222,7 @@
     };
     const draw = () => {
       const query = filter.value.trim().toLocaleLowerCase();
-      matches = query ? entries.filter(entry => entry.search.includes(query)) : entries;
+      matches = query ? entries.filter(entry => matchesQuery(entry.search, query)) : entries;
       shown = 0;
       list.replaceChildren();
       dialog.querySelector('.picker-body').scrollTop = 0;
@@ -285,6 +292,8 @@
   function discardPending() {
     bagDraft.clear();
     dexDraft.clear();
+    flagDraft.clear();
+    varDraft.clear();
     dirty = false;
     render();
     sync();
@@ -382,6 +391,38 @@
   function mon() {
     return ref ? save.mon(ref) : null;
   }
+  // Elite Redux combines abilities, described as "Color Change + Protean + Fur Coat".
+  // Each named part that is itself an ability can be expanded to its own effect.
+  const abilityPartCache = new WeakMap();
+  function abilityParts(id) {
+    let cache = abilityPartCache.get(catalog);
+    if (!cache) {
+      const byName = new Map();
+      for (const a of Object.values(catalog.abilities))
+        if (a.id > 0 && !byName.has(a.name.toLowerCase())) byName.set(a.name.toLowerCase(), a);
+      cache = { byName, parts: new Map() };
+      abilityPartCache.set(catalog, cache);
+    }
+    if (cache.parts.has(id)) return cache.parts.get(id);
+    const desc = catalog.abilities[id]?.desc || '',
+      parts = [];
+    if (desc.includes('+'))
+      for (const segment of desc.split(/\s*\+\s*|[.;,]\s*/)) {
+        const name = segment
+            .replace(/^(also has|has|and)\s+/i, '')
+            .trim()
+            .toLowerCase(),
+          part = cache.byName.get(name);
+        if (part && part.id !== +id && !parts.includes(part)) parts.push(part);
+      }
+    cache.parts.set(id, parts);
+    return parts;
+  }
+  function abilityPartsMarkup(id) {
+    const parts = abilityParts(id);
+    if (!parts.length) return '';
+    return `<details class="ability-parts"><summary>${parts.length === 1 ? `What ${html(parts[0].name)} does` : `Show each effect (${parts.length})`}</summary><dl>${parts.map(p => `<dt>${html(p.name)}</dt><dd>${html(p.desc || 'No description available.')}</dd>`).join('')}</dl></details>`;
+  }
   function abilityChoices(species, pid, opts = options(), config = catalog.config) {
     return [0, 1, 2].map(slot => ERRng.evaluate(species, pid, slot, opts, config).ability);
   }
@@ -395,7 +436,7 @@
       const picker = preview
         ? ''
         : `<button type="button" class="ability-reload" data-pick-ability="${choice ? 'ability' : 'innate'}" data-pick-index="${choice ? slot : innateIndex}" aria-label="Choose ${choice ? 'ability' : 'innate'} ${(choice ? slot : innateIndex) + 1}" title="Choose an available ability">Change</button>`;
-      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${picker}${preview && randomized ? ' (randomized)' : ''}</span>${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small></div>`;
+      return `<div class="ability-card${choice && equipped ? ' is-equipped' : ''}"${choice ? ` data-ability-choice="${slot}" data-equipped="${equipped}"` : ''}><div class="slot-name"><span>${label}${preview && randomized ? ' (randomized)' : ''}${choice && equipped ? `<span class="equipped-badge">${preview ? 'Preview selection' : 'Equipped'}</span>` : ''}</span>${picker}</div><b>${html(catalog.abilities[id]?.name || `#${id}`)}</b><small>${html(catalog.abilities[id]?.desc || 'No description available.')}</small>${abilityPartsMarkup(id)}</div>`;
     };
     return `<section class="ability-group" aria-label="Ability choices"><div class="ability-group-heading"><h2>ABILITY CHOICES</h2><span>${preview ? 'Preview only' : 'One equipped at a time'}</span></div><div class="abilities-list">${choices.map((id, i) => card(id, `ABILITY ${i + 1}`, opts.abilityRng, i)).join('')}</div></section><section class="ability-group" aria-label="Innate abilities"><div class="ability-group-heading"><h2>INNATES</h2></div><div class="abilities-list">${r.innates.map((id, i) => card(id, `INNATE ${i + 1}`, opts.innateRng, undefined, i)).join('')}</div></section>`;
   }
@@ -471,7 +512,7 @@
       const draw = () => {
         if (!dialog.hasAttribute('open')) return;
         const query = filter.value.trim().toLocaleLowerCase();
-        matches = query ? pickerEntries.filter(a => a.search.includes(query)) : pickerEntries;
+        matches = query ? pickerEntries.filter(a => matchesQuery(a.search, query)) : pickerEntries;
         shown = 0;
         list.replaceChildren();
         list.scrollTop = 0;
@@ -536,6 +577,39 @@
     $('health-banner').innerHTML = save.damaged.length
       ? `<span>${save.damaged.length} section checksum(s) failed. Editing is disabled; restore a backup.</span>`
       : `<span>All 20 section checksums pass${save.invalidSlots().length ? `. ${save.invalidSlots().length} unrecognised Pokémon locked` : ''}</span><span class="secondary-text">Save counter ${save.counter} · Level cap ${save.cap()} · ${html(catalog.version)} catalog</span>`;
+    const orphans = save.damaged.length ? [] : save.pokedex().orphans();
+    if (orphans.length) {
+      $('health-banner').classList.add('warn');
+      $('health-banner').insertAdjacentHTML(
+        'beforeend',
+        `<span class="dex-orphans">Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? '…' : ''} ${orphans.length === 1 ? 'is' : 'are'} marked but no Pokémon has ${orphans.length === 1 ? 'it' : 'them'}. The game shows ${orphans.length === 1 ? 'it' : 'them'} as a blank entry and counts ${orphans.length === 1 ? 'it' : 'them'} toward the 999 limit. <button type="button" id="fix-dex">Clear ${orphans.length === 1 ? 'it' : 'them'}</button></span>`,
+      );
+      $('fix-dex').onclick = () => {
+        if (!guard()) return;
+        apply(
+          () => save.clearPokedexOrphans(),
+          `Cleared ${orphans.length} Pokédex ${orphans.length === 1 ? 'number' : 'numbers'} the game can't show.`,
+        );
+      };
+    }
+    const seenTotal = save.damaged.length ? 0 : save.pokedex().counts().seen,
+      limit = save.pokedex().limit;
+    if (seenTotal > limit) {
+      $('health-banner').classList.add('warn');
+      $('health-banner').insertAdjacentHTML(
+        'beforeend',
+        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark the highest ${seenTotal - limit} to keep ${limit}</button></span>`,
+      );
+      $('trim-dex').onclick = () => {
+        if (!guard()) return;
+        let removed = [];
+        apply(() => (removed = save.trimPokedex()), `Pokédex trimmed to ${limit} seen.`);
+        if (removed.length)
+          notify(
+            `Pokédex trimmed to ${limit} seen: unmarked #${removed[0]} to #${removed[removed.length - 1]}.`,
+          );
+      };
+    }
   }
   // Text a roster entry can be found by: nickname, species name, base species (so "Absol" finds
   // "Absol Mega"), dex number and types.
@@ -666,6 +740,13 @@
     document
       .querySelectorAll('[data-tab]')
       .forEach(e => e.classList.toggle('active', e.dataset.tab === tab));
+    // Lets the layout drop the roster on tabs that don't use the selected Pokémon, and keeps
+    // the active tab visible in the scrolling tab bar on phones.
+    $('workspace').dataset.view = tab;
+    const bar = document.querySelector('.tabs'),
+      active = bar?.querySelector('.active');
+    if (bar && active && bar.scrollWidth > bar.clientWidth)
+      bar.scrollLeft = Math.max(0, active.offsetLeft - bar.offsetLeft - 24);
     if (tab === 'settings') {
       renderSettings();
       bindCatalogPickers();
@@ -685,6 +766,10 @@
     }
     if (tab === 'finder') {
       renderFinder();
+      return;
+    }
+    if (tab === 'story') {
+      renderStory();
       return;
     }
     const m = mon();
@@ -1529,6 +1614,269 @@
       }
     };
   }
+  // Fills empty PC slots with one Pokémon of each chosen species, as one undoable edit.
+  // Mega and Primal forms, picked one by one. They normally exist only in battle, so the
+  // dialog says so; they share their base Pokémon's Pokédex entry.
+  function openMegaDialog() {
+    if (!guard(() => openMegaDialog())) return;
+    const cap = save.cap(),
+      kindOf = sp => (/_PRIMAL(_|$)/.test(sp.key) ? 'primal' : 'mega');
+    const forms = Object.values(catalog.species)
+      .filter(sp => sp.id > 0 && /_(MEGA|PRIMAL)(_|$)/.test(sp.key))
+      .map(sp => ({
+        ...sp,
+        no: ERCore.dexNumber(catalog, sp.id),
+        kind: kindOf(sp),
+        base: ERCore.baseSpeciesName(catalog, sp),
+      }))
+      .sort((a, b) => a.no - b.no || a.id - b.id);
+    const owned = new Set(save.allMons().map(m => m.species)),
+      selected = new Set(),
+      view = { text: '', kind: 'all', hideOwned: true };
+    let free = 0;
+    for (let b = 0; b < 26; b++) free += save.box(b).filter(m => !m.species).length;
+    const dialog = openDialog(
+      'Mega and Primal forms',
+      'Tick the forms you want; each goes into an empty PC slot, with you as the original trainer.',
+      `<form class="bulk-form mega-form"><p class="notice warning">Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form outside battle; test a few in the game before relying on them.</p>
+      <label class="field"><span>Search</span><input name="q" type="search" placeholder="For example Charizard, Primal or Cascoon" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <div class="pocket-chips" data-mega-kind role="group" aria-label="Form kind"></div>
+      <div class="checkrow"><label><input type="checkbox" name="hideOwned" checked> Hide forms already in your party or PC</label></div>
+      <div class="actions-inline bag-bulk"><button type="button" data-mega-all>Select shown</button><button type="button" data-mega-none>Clear selection</button></div>
+      <div class="bag-grid mega-grid" data-mega-list></div>
+      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="checkrow"><label><input type="checkbox" name="recordDex" checked> Record their base Pokémon in the Pokédex (up to the 999 seen the game can show)</label></div>
+      <p class="field-help" data-mega-preview aria-live="polite"></p></form>
+      <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add selected</button></div></div>`,
+    );
+    const form = dialog.querySelector('form');
+    const shown = () => {
+      const q = view.text.trim().toLocaleLowerCase();
+      return forms.filter(
+        sp =>
+          (view.kind === 'all' || sp.kind === view.kind) &&
+          !(view.hideOwned && owned.has(sp.id)) &&
+          (!q || matchesQuery(`${sp.name} ${sp.base} ${sp.no} ${sp.kind}`.toLocaleLowerCase(), q)),
+      );
+    };
+    const preview = () => {
+      const n = selected.size;
+      dialog.querySelector('[data-mega-preview]').textContent = n
+        ? `${n} selected · ${free} empty PC slot${free === 1 ? '' : 's'}${n > free ? ` · only the first ${free} fit` : ''}.`
+        : `Nothing selected yet · ${free} empty PC slot${free === 1 ? '' : 's'}.`;
+      dialog.querySelector('[data-confirm]').disabled = !n || !free;
+    };
+    const draw = () => {
+      const counts = {
+        all: forms.length,
+        mega: forms.filter(sp => sp.kind === 'mega').length,
+        primal: forms.filter(sp => sp.kind === 'primal').length,
+      };
+      dialog.querySelector('[data-mega-kind]').innerHTML = [
+        ['all', 'All'],
+        ['mega', 'Mega'],
+        ['primal', 'Primal'],
+      ]
+        .map(
+          ([key, label]) =>
+            `<button type="button" data-kind="${key}" aria-pressed="${key === view.kind}">${label} <small>${counts[key]}</small></button>`,
+        )
+        .join('');
+      const list = shown();
+      dialog.querySelector('[data-mega-list]').innerHTML = list.length
+        ? list
+            .map(
+              sp =>
+                `<label class="bag-item${selected.has(sp.id) ? ' changed' : ''}"><input type="checkbox" data-mega="${sp.id}" ${selected.has(sp.id) ? 'checked' : ''}><span>${html(sp.name)}${owned.has(sp.id) ? ' <span class="mode-tag">Owned</span>' : ''}</span><small>#${sp.no}</small></label>`,
+            )
+            .join('')
+        : '<p class="field-help">No forms match.</p>';
+      preview();
+    };
+    form.elements.q.oninput = e => {
+      view.text = e.target.value;
+      draw();
+    };
+    form.elements.hideOwned.onchange = e => {
+      view.hideOwned = e.target.checked;
+      draw();
+    };
+    dialog.querySelector('[data-mega-kind]').onclick = e => {
+      const chip = e.target.closest('[data-kind]');
+      if (!chip) return;
+      view.kind = chip.dataset.kind;
+      draw();
+    };
+    dialog.querySelector('[data-mega-list]').onchange = e => {
+      const box = e.target.closest('[data-mega]');
+      if (!box) return;
+      if (box.checked) selected.add(+box.dataset.mega);
+      else selected.delete(+box.dataset.mega);
+      box.closest('.bag-item').classList.toggle('changed', box.checked);
+      preview();
+    };
+    dialog.querySelector('[data-mega-all]').onclick = () => {
+      shown().forEach(sp => selected.add(sp.id));
+      draw();
+    };
+    dialog.querySelector('[data-mega-none]').onclick = () => {
+      selected.clear();
+      draw();
+    };
+    form.onsubmit = e => e.preventDefault();
+    draw();
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      try {
+        const level = wholeNumber(form.elements.level.value, 'Level', 1, 100),
+          nature = form.elements.nature.value,
+          list = forms
+            .filter(sp => selected.has(sp.id))
+            .slice(0, free)
+            .map(sp => ({
+              species: sp.id,
+              level,
+              moves: suggestedMoves(sp),
+              ...(nature === 'random' ? {} : { nature: +nature }),
+            }));
+        closeDialog(dialog);
+        applyStructural(
+          () => {
+            save.createMany(
+              list,
+              { startBox: +form.elements.box.value, recordDex: form.elements.recordDex.checked },
+              `Add ${list.length} Mega and Primal form${list.length === 1 ? '' : 's'}`,
+            );
+            return { kind: 'box', box: +form.elements.box.value, slot: 0 };
+          },
+          `${list.length} Mega and Primal form${list.length === 1 ? '' : 's'} added to your PC. Undo removes them all.`,
+        );
+      } catch (e) {
+        fail(e);
+      }
+    };
+  }
+  function openBulkAddDialog(source = 'caught') {
+    if (!guard(() => openBulkAddDialog(source))) return;
+    const entries = dexEntries(),
+      dex = save.pokedex(),
+      cap = save.cap();
+    const caughtCount = entries.filter(sp => dex.caught(sp.no)).length;
+    // Final stages: species with no ordinary evolution left (Eevee gives all eight
+    // Eeveelutions, Gloom both Vileplume and Bellossom). Imported profiles may lack the data.
+    const hasEvolutions = entries.some(sp => sp.evolves);
+    const isFinal = sp => !sp.evolves?.length;
+    const finalCount = entries.filter(isFinal).length;
+    const maxNo = entries.length ? entries[entries.length - 1].no : 1;
+    // Forms have no Pokédex entry of their own (Primal Cascoon is Cascoon's #268), so they
+    // are listed apart: Redux, regional and other variants, and battle forms.
+    const shownIds = new Set(entries.map(sp => sp.id)),
+      battleForm = sp => /_(MEGA|PRIMAL)(_|$)/.test(sp.key),
+      forms = Object.values(catalog.species)
+        .filter(sp => sp.id > 0 && !shownIds.has(sp.id))
+        .map(sp => ({ ...sp, no: ERCore.dexNumber(catalog, sp.id), form: true }))
+        .filter(sp => sp.no > 0)
+        .sort((a, b) => a.no - b.no || a.id - b.id),
+      variants = forms.filter(sp => !battleForm(sp)),
+      battleForms = forms.filter(battleForm),
+      everything = [...entries, ...forms].sort((a, b) => a.no - b.no || a.id - b.id);
+    const dialog = openDialog(
+      'Add many Pokémon',
+      'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label><label><input type="checkbox" name="recordDex" checked> Record them in the Pokédex (up to the 999 seen the game can show)</label></div>
+      <p class="field-help" data-bulk-preview></p><p class="field-help" data-bulk-battle hidden>Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form; the game may not expect it everywhere, so test before relying on them.</p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
+      <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
+    );
+    const form = dialog.querySelector('form');
+    form.elements.source.value = source === 'final' && !hasEvolutions ? 'all' : source;
+    let free = 0;
+    for (let b = 0; b < 26; b++) free += save.box(b).filter(m => !m.species).length;
+    const owned = new Set(
+      save
+        .allMons()
+        .map(m => ERCore.baseSpeciesName(catalog, catalog.species[m.species] || {}) || m.species),
+    );
+    const ownedIds = new Set(save.allMons().map(m => m.species));
+    const pool = source =>
+      ({ variants, battle: battleForms, everything })[source] ||
+      entries.filter(sp =>
+        source === 'all' ? true : source === 'final' ? isFinal(sp) : dex.caught(sp.no),
+      );
+    const chosen = () => {
+      const from = +form.elements.from.value || 1,
+        to = +form.elements.to.value || maxNo;
+      return pool(form.elements.source.value).filter(
+        sp =>
+          sp.no >= Math.min(from, to) &&
+          sp.no <= Math.max(from, to) &&
+          !(
+            form.elements.skipOwned.checked && (sp.form ? ownedIds.has(sp.id) : owned.has(sp.name))
+          ),
+      );
+    };
+    const seenNow = dex.counts().seen;
+    const dexNote = adds => {
+      if (!form.elements.recordDex.checked) return ' The Pokédex is left as it is.';
+      const unseen = new Set(
+        chosen()
+          .slice(0, adds)
+          .filter(sp => !dex.seen(sp.no))
+          .map(sp => sp.no),
+      ).size;
+      const room = Math.max(0, dex.limit - seenNow);
+      return unseen > room
+        ? ` Only ${room} more fit in the Pokédex (${dex.limit} seen is the most the game can show), so ${unseen - room} won't be recorded there.`
+        : unseen
+          ? ` Pokédex: ${seenNow + unseen} seen afterwards.`
+          : '';
+    };
+    const preview = () => {
+      dialog.querySelector('[data-bulk-battle]').hidden = !['battle', 'everything'].includes(
+        form.elements.source.value,
+      );
+      const n = chosen().length,
+        adds = Math.min(n, free);
+      dialog.querySelector('[data-bulk-preview]').textContent = n
+        ? `${n} species selected · ${free} empty PC slot${free === 1 ? '' : 's'} · adds ${adds}${n > free ? ` (the first ${adds} by Pokédex number; the rest don't fit)` : ''}.${dexNote(adds)}`
+        : 'No species match. Mark species caught in the Pokédex (Progress tab), choose Every species, or widen the number range.';
+      dialog.querySelector('[data-confirm]').disabled = !adds;
+    };
+    form.addEventListener('input', preview);
+    form.addEventListener('change', preview);
+    preview();
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      try {
+        const level = wholeNumber(form.elements.level.value, 'Level', 1, 100),
+          nature = form.elements.nature.value,
+          list = chosen()
+            .slice(0, free)
+            .map(sp => ({
+              species: sp.id,
+              level,
+              moves: suggestedMoves(sp),
+              ...(nature === 'random' ? {} : { nature: +nature }),
+            }));
+        closeDialog(dialog);
+        let added = 0;
+        applyStructural(() => {
+          added = save.createMany(
+            list,
+            { startBox: +form.elements.box.value, recordDex: form.elements.recordDex.checked },
+            `Add ${list.length} Pokémon to the PC`,
+          );
+          return { kind: 'box', box: +form.elements.box.value, slot: 0 };
+        }, `${list.length} Pokémon added to your PC. Undo removes them all.`);
+        if (added && added < list.length) notify(`${added} added; the PC is full.`, true);
+        else if (save.lastPokedexSkipped?.length)
+          notify(
+            `${added} added. ${save.lastPokedexSkipped.length} of them weren't recorded in the Pokédex: it already has ${save.pokedex().limit} seen, the most the game can show.`,
+            true,
+          );
+      } catch (e) {
+        fail(e);
+      }
+    };
+  }
   function importSet(dialog, target) {
     const set = ERCore.parseShowdown(
         dialog.querySelector('[data-pane="import"] textarea').value,
@@ -1585,8 +1933,10 @@
   function drawRosterActions() {
     const off = !!save.damaged.length;
     $('roster-actions').innerHTML =
-      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
+      `<button type="button" id="add-mon" ${off ? 'disabled' : ''}>＋ Add Pokémon</button><button type="button" id="add-many" ${off ? 'disabled' : ''}>Add many…</button><button type="button" id="add-megas" ${off ? 'disabled' : ''}>Megas & Primals…</button>${roster === 'party' ? `<button type="button" id="heal-party" ${off ? 'disabled' : ''}>Heal party</button><button type="button" id="friendship-party" ${off ? 'disabled' : ''}>Max friendship</button>` : ''}`;
     $('add-mon').onclick = () => openAddDialog();
+    $('add-many').onclick = () => openBulkAddDialog();
+    $('add-megas').onclick = () => openMegaDialog();
     $('heal-party')?.addEventListener('click', () => {
       if (guard()) apply(() => save.healParty(), 'Party healed: full HP, PP and no status.');
     });
@@ -1832,6 +2182,424 @@
     };
     drawBag();
   }
+  // ---- Story tab: badges, gym leaders, Champion, and story flags and variables ---------------
+  // Milestones replay the game's own event scripts (bundled from the Elite Redux source by
+  // scripts/story.cjs), so a save ends up as if the event had played.
+  const story = JSON.parse($('story-data').textContent);
+  const storyFlagName = new Map(Object.entries(story.flags).map(([n, id]) => [id, n]));
+  const storyVarName = new Map(Object.entries(story.vars).map(([n, id]) => [id, n]));
+  const flagDraft = new Map(),
+    varDraft = new Map();
+  let storyFilter = { text: '', kind: 'vars', show: 'all', group: 'all' };
+  // Switches the game sets only for a moment or a mode (Safari Zone, Cycling Road, debug
+  // menu, nuzlocke runs), plus Battle Frontier symbols, unused badge slots and daily resets.
+  // Turned on together they change how the game plays and looks, so bulk "Set all" skips them.
+  const MODE_FLAG =
+    /^FLAG_(SYS_(NO_|PC_FROM_DEBUG|AUTOWIN|MGBA|DISABLE_|LOCKED_MODE|DETECTOR_MODE|WEATHER_CTRL|CYCLING_ROAD|SAFARI_MODE|CRUISE_MODE|INVERSE_BATTLE|CTRL_OBJ_DELETE|RESET_RTC_ENABLE|DEBUG|UPPED_DIFFICULTY|FRONTIER_PASS|(TOWER|DOME|PALACE|ARENA|FACTORY|PIKE|PYRAMID)_(SILVER|GOLD)|OPEN_MOVE_MENU|USE_FLASH|USE_STRENGTH|DEXNAV_SEARCH|MYSTERY_(GIFT|EVENT)_ENABLE)|BADGE(09|1[0-6])_GET|DEBUG_|NUZLOCKE_|LOST_NUZLOCKE|PREVENT_|AUTOMATIC_SEASON|PERMANENT_UNCHANGEABLE_WEATHER|LEVEL_UP_FROM_PARTY_SCREEN|TOTEM_BATTLE|SHINY_CREATION|ALPHA_CREATION|FORCE_|NEVER_SET|DAILY_)/;
+  const isMode = n => MODE_FLAG.test(n);
+  // Flag groups by the game's naming, so bulk changes can target one kind of flag.
+  const FLAG_GROUPS = {
+    all: ['All flags', () => true],
+    visited: ['Places visited (Fly destinations)', n => /^FLAG_(VISITED|LANDMARK)_/.test(n)],
+    received: ['Gifts received', n => /^FLAG_RECEIVED_/.test(n)],
+    defeated: ['Defeated trainers and Pokémon', n => /^FLAG_DEFEATED_/.test(n)],
+    items: ['Items picked up (visible and hidden)', n => /^FLAG_(ITEM|HIDDEN_ITEM)_/.test(n)],
+    system: ['Game features and badges', n => /^FLAG_(SYS|BADGE)/.test(n) && !isMode(n)],
+    hide: ['Characters and objects shown or hidden', n => /^FLAG_(HIDE|SHOW)_/.test(n)],
+    modes: ['Game modes, debug, Battle Frontier and daily switches', isMode],
+    other: [
+      'Everything else',
+      n =>
+        !isMode(n) &&
+        !/^FLAG_(VISITED_|LANDMARK_|RECEIVED_|DEFEATED_|ITEM_|HIDDEN_ITEM_|SYS|BADGE|HIDE_|SHOW_)/.test(
+          n,
+        ),
+    ],
+  };
+  const prettyName = name =>
+    name
+      .replace(/^(FLAG|VAR)_/, '')
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  const SKIPPED_TEXT = {
+    SetChampionSaveWarp: 'Where Continue starts: you keep playing from where you saved.',
+    UpdateTrainerFanClubGameClear: 'The Trainer Fan Club’s post-game update.',
+    ResetHealLocationFromDewford: 'Where you return after a whiteout.',
+  };
+  const SCREEN_ONLY =
+    /^(special (DrawWholeMapView|PetalburgGymUnlockRoomDoors)|warp|givecustommon)\b/;
+  function storyState() {
+    return {
+      flag: id => save.flag(id),
+      getVar: id => save.getVar(id - story.varsStart),
+      hasItem: id => save.hasItem(id),
+      gender: save.trainerCard().gender,
+    };
+  }
+  // VAR_FACING only decides which way a character walks in Norman's scene.
+  const replayEvent = (entry, start = []) =>
+    ERStory.replay(story, entry, storyState(), { start, assume: { VAR_FACING: 2 } });
+  const planOf = (r, withGifts) => ({
+    flags: [...r.flags],
+    vars: [...r.vars],
+    items: [...r.items],
+    gifts: withGifts ? r.gifts : [],
+  });
+  function giftLabel(g) {
+    const sp = catalog.species[g.species];
+    return `${sp ? sp.name : g.name} (Lv. ${g.level || 'party max'}${g.shiny ? ', shiny' : ''})`;
+  }
+  function freeSlots() {
+    let n = 6 - save.partyCount;
+    for (let b = 0; b < 26; b++) n += save.box(b).filter(m => !m.species).length;
+    return n;
+  }
+  function describeEvent(r, extraNotSaved = []) {
+    const change = [
+      ...[...r.flags].map(
+        ([id, on]) =>
+          `${on ? 'Set' : 'Clear'} ${prettyName(storyFlagName.get(id) || `flag ${id}`)}`,
+      ),
+      ...[...r.vars].map(
+        ([id, n]) =>
+          `${prettyName(storyVarName.get(id) || `variable ${id}`)}: ${save.getVar(id - story.varsStart)} → ${n}`,
+      ),
+    ];
+    const notSaved = [
+      ...new Set(
+        r.skipped
+          .filter(text => !SCREEN_ONLY.test(text))
+          .map(text => {
+            const name = /^special (\w+)/.exec(text)?.[1];
+            return SKIPPED_TEXT[name] || `Game routine ${name || text} (not reproduced).`;
+          }),
+      ),
+      ...extraNotSaved,
+    ];
+    return `<p class="field-help">${change.length} event flag and story variable change${change.length === 1 ? '' : 's'}${r.items.size ? ` · items: ${[...r.items].map(id => html(catalog.items[id]?.name || `#${id}`)).join(', ')}` : ''}.</p>${change.length ? `<details class="story-changes"><summary>Show every change</summary><ul>${change.map(c => `<li>${html(c)}</li>`).join('')}</ul></details>` : ''}${notSaved.length ? `<p class="field-help">Not changed by the editor: ${notSaved.map(html).join(' ')}</p>` : ''}`;
+  }
+  function confirmStoryEvent(
+    title,
+    intro,
+    r,
+    onApply,
+    { extraNotSaved = [], extraGifts = [] } = {},
+  ) {
+    const gifts = [...extraGifts, ...r.gifts];
+    const room = freeSlots();
+    const dialog = openDialog(
+      title,
+      intro,
+      `${describeEvent(r, extraNotSaved)}${gifts.length ? `<label class="checkrow story-gift"><input type="checkbox" data-gifts ${room >= gifts.length ? 'checked' : 'disabled'}> Also receive the gift Pokémon: ${gifts.map(giftLabel).map(html).join(', ')}${room < gifts.length ? ' (no room in your party or PC)' : ''}</label>` : ''}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Apply</button></div></div>`,
+    );
+    dialog.querySelector('[data-confirm]').onclick = () => {
+      const withGifts = !!dialog.querySelector('[data-gifts]')?.checked;
+      closeDialog(dialog);
+      onApply(withGifts);
+    };
+  }
+  function beatLeader(g) {
+    if (!guard(() => beatLeader(g))) return;
+    let r;
+    try {
+      r = replayEvent(g.entry);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    confirmStoryEvent(
+      `Beat ${g.leader}`,
+      `Applies what winning at the ${g.city} Gym does in the game: the ${g.badge}, the gym's defeated flag, its prizes and the story changes that follow.`,
+      r,
+      withGifts =>
+        applyStructural(() => {
+          save.applyStory(planOf(r, withGifts), `Beat ${g.leader} (${g.badge})`);
+        }, `${g.leader} beaten. ${g.badge} earned.`),
+    );
+  }
+  function becomeChampion() {
+    if (!guard(becomeChampion)) return;
+    const missing = story.gyms.filter(g => !save.flag(g.gymFlag));
+    let r;
+    try {
+      r = replayEvent(story.champion.entry, story.champion.before);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    const gymGifts = [];
+    try {
+      // Preview the gifts of the gyms that would be beaten first (each gym's own gift only).
+      for (const g of missing) gymGifts.push(...replayEvent(g.entry).gifts);
+    } catch {}
+    confirmStoryEvent(
+      'Become Champion',
+      `Applies the Hall of Fame: Champion status, the game-clear flag the post-game checks, and the story changes the game makes when the credits roll.${missing.length ? ` First beats the ${missing.length} gym leader${missing.length === 1 ? '' : 's'} you haven't beaten (${missing.map(g => g.leader).join(', ')}), as Beat leader would.` : ''}`,
+      r,
+      withGifts =>
+        applyStructural(() => {
+          save.transact('Become Champion', () => {
+            for (const g of missing)
+              save.applyStory(planOf(replayEvent(g.entry), withGifts), `Beat ${g.leader}`);
+            const champ = replayEvent(story.champion.entry, story.champion.before);
+            const plan = planOf(champ, withGifts);
+            plan.flags.push([story.champion.gameClear, 1], [story.champion.isChampion, 1]);
+            plan.champion = true;
+            save.applyStory(plan, 'Become Champion');
+          });
+        }, 'You are now the Champion. The post-game is unlocked.'),
+      {
+        extraGifts: gymGifts,
+        extraNotSaved: [
+          'Hall of Fame team records (the trainer card still shows a Hall of Fame entry).',
+          'Champion Ribbons.',
+        ],
+      },
+    );
+  }
+  function renderStory() {
+    const off = save.damaged.length ? 'disabled' : '',
+      cleared = save.flag(story.champion.gameClear),
+      badges = story.gyms.filter(g => save.flag(g.badgeFlag)).length;
+    $('editor-panel').innerHTML =
+      `<div class="page-heading"><h1>Story and league.</h1><p>Badges, gym leaders and the Champion, replayed from the game's own event scripts, plus every story flag and variable.</p></div>
+    <section class="panel" id="league-panel"><div class="panel-heading"><h2>BADGES & GYM LEADERS</h2><span>${badges} of 8 badges</span></div><p class="notice">A badge on its own only counts for level caps and field moves. <b>Beat leader</b> does everything winning that gym does in the game: the badge, the gym's defeated flag, its TM and gift, and the story that moves on afterwards. It is safest in gym order, because beating a gym early also moves that town's story along.</p>
+    <div class="gym-list">${story.gyms
+      .map((g, i) => {
+        const badge = save.flag(g.badgeFlag),
+          beaten = save.flag(g.gymFlag);
+        return `<div class="gym-row"><label class="gym-badge"><input type="checkbox" data-badge="${i}" ${badge ? 'checked' : ''} ${off}> <span><b>${html(g.badge)}</b><small>${html(g.leader)} · ${html(g.city)}</small></span></label><span class="gym-status${beaten ? ' done' : ''}">${beaten ? 'Leader beaten' : badge ? 'Badge only' : 'Not earned'}</span><button type="button" data-beat="${i}" ${beaten || off ? 'disabled' : ''}>${beaten ? 'Beaten' : 'Beat leader…'}</button></div>`;
+      })
+      .join(
+        '',
+      )}</div><div class="actions-inline" style="margin-top:14px"><button type="button" id="all-badges" ${badges === 8 || off ? 'disabled' : ''}>Give all 8 badges</button></div></section>
+    <section class="panel"><div class="panel-heading"><h2>ELITE FOUR & CHAMPION</h2><span>${cleared ? 'Champion · game cleared' : 'Not cleared yet'}</span></div><p class="field-help" style="margin-top:0">${cleared ? 'This save has entered the Hall of Fame, so the post-game is open.' : 'Becoming Champion sets what the game sets after the Hall of Fame: the game-clear flag the post-game checks for, Champion status, the post-game story (the S.S. Tidal, Steven’s house, Cynthia and more), the Hall of Fame count on your trainer card and a fully healed party. The Elite Four reset for rematches, as in the game.'}</p><div class="actions-inline"><button type="button" class="primary" id="become-champion" ${cleared || off ? 'disabled' : ''}>${cleared ? 'Already Champion' : 'Become Champion…'}</button></div></section>
+    ${(() => {
+      const on = Object.entries(story.flags).filter(
+        ([n, id]) => isMode(n) && !/^FLAG_DAILY_/.test(n) && save.flag(id),
+      );
+      return on.length
+        ? `<div class="notice warning story-mode-warning"><b>${on.length} game-mode or debug switch${on.length === 1 ? ' is' : 'es are'} on in this save:</b> ${on
+            .slice(0, 12)
+            .map(([n]) => html(prettyName(n)))
+            .join(
+              ', ',
+            )}${on.length > 12 ? ` and ${on.length - 12} more` : ''}. The game sets some of these in normal play (Safari Zone, Cycling Road, a nuzlocke run), but if you didn't, turning them off restores normal play. <button type="button" id="review-modes">Review them</button></div>`
+        : '';
+    })()}
+    <details class="panel" id="story-panel" ${storyOpen ? 'open' : ''}><summary class="panel-heading"><h2>STORY FLAGS & VARIABLES</h2><span>Advanced · every named event flag and story variable</span></summary><p class="notice warning">These are the game's raw story switches. Changing one without the others an event normally changes can leave characters missing or stuck, so change only what you understand, keep a backup, and prefer the buttons above.</p>
+    <div class="bag-tools"><label class="field"><span>Search</span><input id="story-search" type="search" value="${html(storyFilter.text)}" placeholder="For example Rustboro, Steven or Badge" autocomplete="off"></label><label class="field"><span>Show</span><select id="story-kind"><option value="vars">Story variables</option><option value="flags">Event flags</option></select></label><label class="field"><span>Filter</span><select id="story-show"><option value="all">All</option><option value="set">Set or non-zero</option><option value="changed">Changed here</option></select></label></div>
+    <div class="story-flag-tools" id="story-flag-tools"><label class="field"><span>Flag group</span><select id="story-group">${Object.entries(
+      FLAG_GROUPS,
+    )
+      .map(([k, [label]]) => `<option value="${k}">${html(label)}</option>`)
+      .join(
+        '',
+      )}</select></label><div class="actions-inline"><button type="button" id="story-set-all" ${off}>Set all shown</button><button type="button" id="story-clear-all" ${off}>Clear all shown</button></div></div>
+    <div id="story-list" class="story-list"></div><div class="form-footer"><p id="story-pending">No pending story changes.</p><div class="actions-inline"><button type="button" id="story-discard">Discard</button><button type="button" class="primary" id="story-apply" data-dirty-apply ${off}>Apply story changes</button></div></div></details>
+    <p class="field-help">Story data comes from the Elite Redux source (${html(story.source)}) and was checked against 2.65.4.11b saves.</p>`;
+    document.querySelectorAll('[data-badge]').forEach(
+      box =>
+        (box.onchange = () => {
+          const g = story.gyms[+box.dataset.badge];
+          if (!guard()) {
+            box.checked = !box.checked;
+            return;
+          }
+          apply(
+            () =>
+              save.applyStory(
+                { flags: [[g.badgeFlag, box.checked ? 1 : 0]] },
+                `${box.checked ? 'Give' : 'Remove'} ${g.badge}`,
+              ),
+            `${g.badge} ${box.checked ? 'added' : 'removed'}.`,
+          );
+        }),
+    );
+    document
+      .querySelectorAll('[data-beat]')
+      .forEach(b => (b.onclick = () => beatLeader(story.gyms[+b.dataset.beat])));
+    $('all-badges').onclick = () => {
+      if (!guard()) return;
+      apply(
+        () =>
+          save.applyStory({ flags: story.gyms.map(g => [g.badgeFlag, 1]) }, 'Give all 8 badges'),
+        'All 8 badges added.',
+      );
+    };
+    $('become-champion').onclick = becomeChampion;
+    $('review-modes')?.addEventListener('click', () => {
+      Object.assign(storyFilter, { kind: 'flags', group: 'modes', show: 'set', text: '' });
+      storyOpen = true;
+      render();
+      $('story-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    $('story-panel').addEventListener('toggle', e => (storyOpen = e.target.open));
+    // Advanced list
+    $('story-kind').value = storyFilter.kind;
+    $('story-show').value = storyFilter.show;
+    const rows = () => {
+      const q = storyFilter.text.trim().toLowerCase().replace(/\s+/g, '_');
+      const source =
+        storyFilter.kind === 'vars'
+          ? Object.entries(story.vars).filter(([n]) => !/^VAR_(TEMP|OBJ_GFX_ID)_/.test(n))
+          : Object.entries(story.flags);
+      return source
+        .filter(([n, id]) => {
+          if (q && !n.toLowerCase().includes(q)) return false;
+          if (storyFilter.kind === 'flags' && !FLAG_GROUPS[storyFilter.group][1](n)) return false;
+          const draft = storyFilter.kind === 'vars' ? varDraft : flagDraft;
+          if (storyFilter.show === 'changed') return draft.has(id);
+          if (storyFilter.show === 'set')
+            return storyFilter.kind === 'vars'
+              ? (draft.get(id) ?? save.getVar(id - story.varsStart)) !== 0
+              : !!(draft.get(id) ?? save.flag(id));
+          return true;
+        })
+        .sort((a, b) => a[1] - b[1]);
+    };
+    const pending = () => {
+      const n = flagDraft.size + varDraft.size;
+      dirty = n > 0;
+      $('story-panel').classList.toggle('is-dirty', dirty);
+      $('story-pending').textContent = n
+        ? `${n} pending story change${n === 1 ? '' : 's'} · apply to save them`
+        : 'No pending story changes.';
+      sync();
+    };
+    const draw = () => {
+      $('story-flag-tools').hidden = storyFilter.kind !== 'flags';
+      const list = rows();
+      $('story-list').innerHTML = list.length
+        ? list
+            .slice(0, 300)
+            .map(([name, id]) => {
+              if (storyFilter.kind === 'vars') {
+                const value = varDraft.get(id) ?? save.getVar(id - story.varsStart),
+                  note = story.varNotes[name];
+                return `<label class="story-row${varDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}</b><small>${html(name)} · 0x${id.toString(16).toUpperCase()}${note ? ` · ${html(note)}` : ''}</small></span><input type="number" min="0" max="65535" value="${value}" data-story-var="${id}" aria-label="${html(prettyName(name))}" ${off}></label>`;
+              }
+              const on = flagDraft.get(id) ?? save.flag(id);
+              return `<label class="story-row${flagDraft.has(id) ? ' changed' : ''}"><span><b>${html(prettyName(name))}${isMode(name) ? ' <em class="mode-tag">Game mode switch</em>' : ''}</b><small>${html(name)} · #${id}</small></span><input type="checkbox" data-story-flag="${id}" ${on ? 'checked' : ''} aria-label="${html(prettyName(name))}" ${off}></label>`;
+            })
+            .join('') +
+          (list.length > 300
+            ? `<p class="field-help">Showing 300 of ${list.length}. Search to narrow the list.</p>`
+            : '')
+        : '<p class="field-help">Nothing matches.</p>';
+      pending();
+    };
+    $('story-list').oninput = e => {
+      const v = e.target.closest('[data-story-var]'),
+        f = e.target.closest('[data-story-flag]');
+      if (v) {
+        const id = +v.dataset.storyVar,
+          n = Number(v.value);
+        if (!Number.isInteger(n) || n < 0 || n > 65535) return;
+        if (n === save.getVar(id - story.varsStart)) varDraft.delete(id);
+        else varDraft.set(id, n);
+        v.parentElement.classList.toggle('changed', varDraft.has(id));
+      }
+      if (f) {
+        const id = +f.dataset.storyFlag,
+          on = f.checked ? 1 : 0;
+        if (on === save.flag(id)) flagDraft.delete(id);
+        else flagDraft.set(id, on);
+        f.parentElement.classList.toggle('changed', flagDraft.has(id));
+      }
+      pending();
+    };
+    $('story-search').oninput = e => {
+      storyFilter.text = e.target.value;
+      draw();
+    };
+    $('story-kind').onchange = e => {
+      storyFilter.kind = e.target.value;
+      draw();
+    };
+    $('story-group').value = storyFilter.group;
+    $('story-group').onchange = e => {
+      storyFilter.group = e.target.value;
+      draw();
+    };
+    // Bulk changes cover every flag the search, group and filter match, not only the 300 shown.
+    const setShown = on => {
+      let skipped = 0;
+      for (const [name, id] of rows()) {
+        // Never switch modes, debug options or Frontier symbols on in bulk.
+        if (on && isMode(name)) {
+          if (!save.flag(id)) skipped++;
+          continue;
+        }
+        if (on === save.flag(id)) flagDraft.delete(id);
+        else flagDraft.set(id, on);
+      }
+      draw();
+      if (skipped)
+        notify(
+          `Skipped ${skipped} game-mode, debug, Battle Frontier and daily switch${skipped === 1 ? '' : 'es'}. Tick them one at a time if you really want them.`,
+        );
+    };
+    $('story-set-all').onclick = () => setShown(1);
+    $('story-clear-all').onclick = () => setShown(0);
+    $('story-show').onchange = e => {
+      storyFilter.show = e.target.value;
+      draw();
+    };
+    $('story-discard').onclick = () => {
+      flagDraft.clear();
+      varDraft.clear();
+      draw();
+    };
+    $('story-apply').onclick = () => {
+      const n = flagDraft.size + varDraft.size;
+      if (!n) {
+        notify('No story changes to apply.');
+        return;
+      }
+      const plan = { flags: [...flagDraft], vars: [...varDraft] };
+      const commit = () =>
+        apply(
+          () => {
+            save.applyStory(plan, `Edit ${n} story value${n === 1 ? '' : 's'}`);
+            flagDraft.clear();
+            varDraft.clear();
+          },
+          `${n} story value${n === 1 ? '' : 's'} updated. Undo reverses all of them at once.`,
+        );
+      const name = id => storyFlagName.get(id) || '';
+      const hide = plan.flags.filter(([id]) => FLAG_GROUPS.hide[1](name(id))).length,
+        items = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.items[1](name(id))).length,
+        defeated = plan.flags.filter(([id, on]) => on && FLAG_GROUPS.defeated[1](name(id))).length,
+        modes = plan.flags.filter(([id, on]) => on && isMode(name(id))).length;
+      if (n <= 25 && !hide && !modes) {
+        commit();
+        return;
+      }
+      const risks = [
+        modes &&
+          `${modes} game-mode or debug switch${modes === 1 ? '' : 'es'} will turn on (for example no wild encounters, no catching, auto-win, Safari Zone mode or Frontier symbols). These change how the game plays and looks.`,
+        hide &&
+          `${hide} flag${hide === 1 ? ' changes' : 's change'} which characters and objects appear. Story characters can vanish or block paths, and some events may never trigger.`,
+        items &&
+          `${items} item${items === 1 ? '' : 's'} will count as already picked up, so those item balls and hidden items disappear without giving you anything.`,
+        defeated &&
+          `${defeated} trainer${defeated === 1 ? '' : 's'} or Pokémon will count as defeated, including legendaries you may not have caught yet.`,
+      ].filter(Boolean);
+      const dialog = openDialog(
+        `Change ${n} story values?`,
+        'Large flag changes can break a run. Keep the original backup before you play this save.',
+        `${risks.length ? `<ul class="story-risks">${risks.map(r => `<li>${html(r)}</li>`).join('')}</ul>` : ''}<p class="field-help">Undo reverses the whole change in one step.</p><div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Apply ${n} changes</button></div></div>`,
+      );
+      dialog.querySelector('[data-confirm]').onclick = () => {
+        closeDialog(dialog);
+        commit();
+      };
+    };
+    draw();
+  }
+  let storyOpen = false;
   // ---- Progress tab: Pokédex, game stats, nuzlocke, roamer, clock -----------------------------
   let dexDraft = new Map(),
     dexFilter = { text: '', show: 'all' };
@@ -1853,11 +2621,15 @@
     'Machine',
     'Plain',
   ];
+  const DEX_SHOW = {
+    all: 'All species',
+    caught: 'Caught',
+    seen: 'Seen, not caught',
+    none: 'Not seen',
+  };
+  // One entry per Pokédex number (sp.no), shown as its base species (sp.id).
   function dexEntries() {
-    const max = save.pokedex().max;
-    return Object.values(catalog.species)
-      .filter(sp => sp.id >= 1 && sp.id <= max && ERCore.baseSpeciesName(catalog, sp) === sp.name)
-      .sort((a, b) => a.id - b.id);
+    return ERCore.pokedexList(catalog).map(({ no, species }) => ({ ...species, no }));
   }
   function renderProgress() {
     const off = save.damaged.length ? 'disabled' : '',
@@ -1869,9 +2641,9 @@
     const roamerSpecies = catalog.species[roamer.species];
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Progress and records.</h1><p>Your Pokédex, game statistics, nuzlocke tracking and the in-game clock.</p></div>
-    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Seen and caught are tracked per species. Marking a species caught also marks it seen; clearing seen clears caught. This changes Pokédex records only; it does not add Pokémon.</p>
-    <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label><label class="field"><span>Show</span><select id="dex-show"><option value="all">All species</option><option value="caught">Caught</option><option value="seen">Seen, not caught</option><option value="none">Not seen</option></select></label><span></span></div>
-    <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button></div>
+    <section class="panel" id="dex-panel"><div class="panel-heading"><h2>POKÉDEX</h2><span id="dex-count"></span></div><p class="notice">Changes Pokédex records only, not your Pokémon. Forms share their base Pokémon's entry (Primal Cascoon counts as Cascoon). Keep it to 999 seen: the game's Pokédex crashes at 1,000.</p>
+    <div class="bag-tools"><label class="field"><span>Search species</span><input id="dex-search" type="search" value="${html(dexFilter.text)}" placeholder="Name or number" autocomplete="off"></label></div><div class="pocket-chips" id="dex-show" role="group" aria-label="Show species"></div>
+    <div class="actions-inline bag-bulk"><button type="button" data-dex-bulk="caught" ${off}>Mark shown as caught</button><button type="button" data-dex-bulk="seen" ${off}>Mark shown as seen</button><button type="button" data-dex-bulk="none" ${off}>Clear shown</button><button type="button" id="dex-add-pc" ${off}>Add caught species to PC…</button></div>
     <div id="dex-list" class="bag-grid dex-grid"></div><div class="form-footer"><p id="dex-pending">No pending Pokédex changes.</p><div class="actions-inline"><button type="button" id="dex-discard">Discard</button><button type="button" class="primary" id="dex-apply" data-dirty-apply ${off}>Apply Pokédex changes</button></div></div></section>
     <form id="stats-form"><fieldset ${off} class="plain"><section class="panel"><div class="panel-heading"><h2>GAME STATS</h2><span>Shown on the trainer card and in TV shows</span></div><div class="field-grid">${Object.entries(
       ERCore.GAME_STATS_EDITABLE,
@@ -1893,15 +2665,28 @@
             : dex.seen(n)
               ? 'seen'
               : 'none';
-    $('dex-show').value = dexFilter.show;
+    // Forms (Primal Cascoon, Rattata Redux…) have no entry of their own; searching shows them
+    // next to their base, and each one sets that shared entry.
+    const listed = new Set(entries.map(sp => sp.id)),
+      baseOf = new Map(entries.map(sp => [sp.no, sp.name])),
+      forms = Object.values(catalog.species)
+        .filter(sp => sp.id > 0 && !listed.has(sp.id))
+        .map(sp => ({ ...sp, no: ERCore.dexNumber(catalog, sp.id), form: true }))
+        .filter(sp => baseOf.has(sp.no));
     const shown = () => {
       const q = dexFilter.text.trim().toLocaleLowerCase();
-      return entries.filter(
+      return (
+        q ? [...entries, ...forms].sort((a, b) => a.no - b.no || !!a.form - !!b.form) : entries
+      ).filter(
         sp =>
-          (!q || `${sp.name} ${sp.id}`.toLocaleLowerCase().includes(q)) &&
-          (dexFilter.show === 'all' || stateOf(sp.id) === dexFilter.show),
+          (!q ||
+            matchesQuery(`${sp.name} ${sp.no}`.toLocaleLowerCase(), q) ||
+            (sp.form && matchesQuery(`${baseOf.get(sp.no)} ${sp.no}`.toLocaleLowerCase(), q))) &&
+          (dexFilter.show === 'all' || stateOf(sp.no) === dexFilter.show),
       );
     };
+    // Unique entries among the shown rows, for bulk actions.
+    const shownEntries = () => [...new Map(shown().map(sp => [sp.no, sp])).values()];
     const pending = () => {
       dirty = dexDraft.size > 0;
       $('dex-panel').classList.toggle('is-dirty', dirty);
@@ -1909,14 +2694,27 @@
       let s = 0,
         c = 0;
       for (const sp of entries) {
-        const st = stateOf(sp.id);
+        const st = stateOf(sp.no);
         if (st !== 'none') s++;
         if (st === 'caught') c++;
       }
       $('dex-count').textContent = `${c} caught · ${s} seen · ${entries.length} species`;
-      $('dex-pending').textContent = dexDraft.size
-        ? `${dexDraft.size} pending Pokédex change${dexDraft.size === 1 ? '' : 's'} · apply to save them`
-        : 'No pending Pokédex changes.';
+      // Buttons rather than a dropdown: one tap on phones, and each shows its count.
+      const counts = { all: entries.length, caught: c, seen: s - c, none: entries.length - s };
+      $('dex-show').innerHTML = Object.entries(DEX_SHOW)
+        .map(
+          ([key, label]) =>
+            `<button type="button" data-dex-show="${key}" aria-pressed="${key === dexFilter.show}">${label} <small>${counts[key]}</small></button>`,
+        )
+        .join('');
+      const tooMany = s > save.pokedex().limit && dexDraft.size;
+      $('dex-pending').textContent = tooMany
+        ? `${s.toLocaleString()} would be seen. The game's Pokédex crashes at 1,000 or more, so clear ${s - save.pokedex().limit} before applying.`
+        : dexDraft.size
+          ? `${dexDraft.size} pending Pokédex change${dexDraft.size === 1 ? '' : 's'} · apply to save them`
+          : 'No pending Pokédex changes.';
+      $('dex-pending').classList.toggle('warning-text', !!tooMany);
+      $('dex-apply').disabled = !!tooMany || !!off;
     };
     const original = n => (dex.caught(n) ? 'caught' : dex.seen(n) ? 'seen' : 'none');
     const setState = (n, st) => {
@@ -1929,8 +2727,8 @@
         ? list
             .slice(0, 600)
             .map(sp => {
-              const st = stateOf(sp.id);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.id) ? ' changed' : ''}"><span>${html(sp.name)}</span><small>#${sp.id}</small><select data-dex="${sp.id}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+              const st = stateOf(sp.no);
+              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
             })
             .join('') +
           (list.length > 600
@@ -1942,26 +2740,54 @@
     $('dex-list').onchange = e => {
       const el = e.target.closest('[data-dex]');
       if (!el) return;
-      setState(+el.dataset.dex, el.value);
-      el.parentElement.classList.toggle('changed', dexDraft.has(+el.dataset.dex));
+      const no = +el.dataset.dex;
+      setState(no, el.value);
+      // A form and its base share one entry: keep every row for it in step.
+      $('dex-list')
+        .querySelectorAll(`[data-dex="${no}"]`)
+        .forEach(other => {
+          other.value = el.value;
+          other.parentElement.classList.toggle('changed', dexDraft.has(no));
+        });
       pending();
     };
     $('dex-search').oninput = e => {
       dexFilter.text = e.target.value;
       draw();
     };
-    $('dex-show').onchange = e => {
-      dexFilter.show = e.target.value;
+    $('dex-show').onclick = e => {
+      const chip = e.target.closest('[data-dex-show]');
+      if (!chip) return;
+      dexFilter.show = chip.dataset.dexShow;
       draw();
     };
     document.querySelectorAll('[data-dex-bulk]').forEach(
       b =>
         (b.onclick = () => {
-          const st = b.dataset.dexBulk;
-          shown().forEach(sp => setState(sp.id, st));
+          const st = b.dataset.dexBulk,
+            limit = save.pokedex().limit;
+          // Never go past the 999 seen the game can draw: mark in Pokédex order until full.
+          let seen = entries.filter(sp => stateOf(sp.no) !== 'none').length,
+            skipped = 0;
+          for (const sp of shownEntries()) {
+            if (st !== 'none' && stateOf(sp.no) === 'none') {
+              if (seen >= limit) {
+                skipped++;
+                continue;
+              }
+              seen++;
+            }
+            setState(sp.no, st);
+          }
           draw();
+          if (skipped)
+            notify(
+              `${skipped} left unmarked: the game's Pokédex crashes at 1,000 seen, so it stops at ${limit}. Clear others to make room for them.`,
+              true,
+            );
         }),
     );
+    $('dex-add-pc').onclick = () => openBulkAddDialog('caught');
     $('dex-discard').onclick = () => {
       dexDraft.clear();
       dirty = false;
@@ -2411,7 +3237,7 @@
         .join(
           '',
         )}</div><div class="form-footer"><p>Stat-affecting settings also refresh party stat caches.</p><div class="actions-inline"><button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply game settings</button></div></div></section></fieldset></form>
-    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision, so choose your game version next to the file name. 2.65.4 and 2.65.4.11b are bundled; other builds need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled ${LATEST_VERSION} data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
+    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision, so choose your game version next to the file name. 2.65.4, 2.65.4.11b and 2.65.5.2b are bundled; other builds need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities as 2.65.4. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled ${LATEST_VERSION} data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
     const form = $('settings-form');
     bindDirty(form);
     form.onsubmit = e => {
@@ -2485,6 +3311,7 @@
           abilities: s.stats.abis,
           innates: s.stats.inns,
           gender: s.stats.gender === 255 ? 255 : Math.floor(s.stats.gender / 100),
+          dex: s.dex?.id || 0,
           learnset: [],
           forms: [],
         };
@@ -2675,9 +3502,14 @@
     try {
       const next = new ERCore.Save(await file.arrayBuffer(), catalog);
       // Switch to the build this save most likely comes from (bundled data only).
-      let switched = null;
+      let switched = null,
+        unsure = false;
       if (bundledVersionOf(catalog)) {
-        const guess = ERCore.detectVersion(next, bundled, file.name, { '2.65.4.1b': '2.65.4' });
+        const guess = ERCore.detectVersion(next, bundled, file.name, {
+          '2.65.4.1b': '2.65.4',
+          '2.65.5': '2.65.5.2b',
+        });
+        unsure = !guess;
         if (guess && bundled[guess.version] !== catalog) {
           switched = guess;
           catalog = next.catalog = bundled[guess.version];
@@ -2725,7 +3557,9 @@
                     ? 'the file name says so'
                     : 'your party’s stats match that build'
               }. Change it next to the file name if that’s wrong.`
-            : 'Save loaded and checked.',
+            : unsure
+              ? `Save loaded and checked, using Elite Redux ${bundledVersionOf(catalog)} data. The save doesn’t say which build it comes from, so check Game version next to the file name: randomized abilities depend on it.`
+              : 'Save loaded and checked.',
         !!save.damaged.length,
       );
     } catch (e) {
@@ -2838,6 +3672,74 @@
   }
   $('help-button').onclick = () => showDialog($('help-dialog'));
   $('close-help').onclick = () => closeDialog($('help-dialog'));
+  // ---- Optional analytics ------------------------------------------------------------------
+  // Present only in builds made with ER_GA_ID, loaded only after the visitor allows it, and never
+  // in the offline editor (a file:// page). Only page views are sent: nothing from the save.
+  const analytics = window.ER_ANALYTICS,
+    analyticsOn = !!analytics?.id && /^https?:$/.test(location.protocol),
+    CONSENT_KEY = 'er-analytics-consent';
+  let analyticsLoaded = false;
+  const readConsent = () => {
+    try {
+      return localStorage.getItem(CONSENT_KEY);
+    } catch {
+      return null;
+    }
+  };
+  function loadAnalytics() {
+    if (analyticsLoaded || !analyticsOn) return;
+    analyticsLoaded = true;
+    window[`ga-disable-${analytics.id}`] = false;
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () {
+      window.dataLayer.push(arguments);
+    };
+    window.gtag('js', new Date());
+    window.gtag('config', analytics.id, {
+      allow_google_signals: false,
+      allow_ad_personalization_signals: false,
+    });
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(analytics.id)}`;
+    document.head.append(script);
+  }
+  function setConsent(choice) {
+    try {
+      localStorage.setItem(CONSENT_KEY, choice);
+    } catch {
+      /* private mode: the choice lasts for this visit */
+    }
+    $('analytics-consent').hidden = true;
+    if (choice === 'yes') loadAnalytics();
+    else if (analyticsLoaded) {
+      // Stop sending and remove the Google Analytics cookies this site set.
+      window[`ga-disable-${analytics.id}`] = true;
+      for (const name of document.cookie.split(';').map(c => c.split('=')[0].trim()))
+        if (/^_ga/.test(name))
+          for (const domain of [
+            '',
+            `; domain=${location.hostname}`,
+            `; domain=.${location.hostname}`,
+          ])
+            document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/${domain}`;
+    }
+  }
+  document
+    .querySelectorAll('[data-analytics]')
+    .forEach(el => (el.hidden = (el.dataset.analytics === 'on') !== analyticsOn));
+  if (analyticsOn) {
+    $('analytics-yes').onclick = () => setConsent('yes');
+    $('analytics-no').onclick = () => setConsent('no');
+    $('analytics-more').onclick = () => showDialog($('privacy-dialog'));
+    $('analytics-change').onclick = () => {
+      closeDialog($('privacy-dialog'));
+      $('analytics-consent').hidden = false;
+    };
+    const consent = readConsent();
+    if (consent === 'yes') loadAnalytics();
+    else if (consent !== 'no') $('analytics-consent').hidden = false;
+  }
   $('editor-panel').addEventListener('click', e => {
     const chooser = e.target.closest('[data-catalog-input]');
     if (chooser) {
@@ -2869,6 +3771,11 @@
     parsed.getElementById('health-banner').innerHTML = '';
     parsed.getElementById('box-select').innerHTML = '';
     parsed.getElementById('toast').setAttribute('hidden', '');
+    // The offline editor never carries analytics.
+    parsed
+      .querySelectorAll('#analytics-config, script[src*="googletagmanager"]')
+      .forEach(e => e.remove());
+    parsed.getElementById('analytics-consent').setAttribute('hidden', '');
     parsed
       .querySelectorAll(
         'datalist,dialog:not(#help-dialog):not(#privacy-dialog):not(#terms-dialog),.dialog-backdrop,[data-transient-download]',

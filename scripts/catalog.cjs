@@ -146,13 +146,24 @@ for (const s of data.species) {
     abilities: three(s.stats.abis),
     innates: three(s.stats.inns),
     gender: s.stats.gender === 255 ? 255 : Math.floor(s.stats.gender / 100),
+    // National Pokédex number. Elite Redux numbers its later species apart from their
+    // species IDs (Grotom is species 1097 but #1128), and forms share their base's number.
+    dex: s.dex?.id || 0,
     learnset: unique([...s.levelUpMoves.map(m => m.id), ...s.TMHMMoves, ...s.tutor, ...s.eggMoves]),
     // Mega and primal forms. Nextdex stores evolution targets as positions in its species array.
     forms: s.evolutions
       .filter(e => /MEGA|PRIMAL/.test(data.evoKindT[e.kd]))
       .map(e => data.species[e.in]?.id)
       .filter(Boolean),
+    // Ordinary evolutions (level, gendered level): used to tell final stages apart.
+    evolves: unique(
+      s.evolutions
+        .filter(e => /^EVO_LEVEL/.test(data.evoKindT[e.kd]))
+        .map(e => data.species[e.in]?.id)
+        .filter(Boolean),
+    ),
   };
+  if (!catalog.species[s.id].evolves.length) delete catalog.species[s.id].evolves;
 }
 for (const m of data.moves) {
   catalog.moves[m.id] = {

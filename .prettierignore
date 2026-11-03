@@ -6,3 +6,4 @@ scripts/sprite-hashes.json
 test-output/
 sav/
 src/catalog-patches.json
+src/story.json
