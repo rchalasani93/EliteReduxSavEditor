@@ -3336,6 +3336,42 @@
     return out;
   }
   // ---- Game version picker ---------------------------------------------------------------------
+  const VERSION_REASONS = {
+    pokemon: 'your Pokémon include species, moves, held items or PP that only that build has',
+    items: 'your bag has items that only that build has',
+    pokedex: 'your Pokédex has entries that only that build has',
+    filename: 'the file name says so',
+    stats: 'your party’s stats match that build',
+  };
+  // Asked when a save holds nothing that only one build has (a new game, say). The last version
+  // used is offered first; closing the question keeps it.
+  function askVersion(candidates) {
+    const order = Object.keys(GAME_VERSIONS).filter(v => candidates.includes(v)),
+      last = rememberedVersion(),
+      preferred = order.includes(last) ? last : order[0],
+      note = preferred === last ? 'last used' : 'newest';
+    return new Promise(resolve => {
+      let chosen = null;
+      const dialog = openDialog(
+        'Which Elite Redux version is this save from?',
+        'Saves don’t record their version, and nothing in this one is unique to a single build.',
+        `<p class="field-help">The version decides every randomized ability and innate, so pick the build you play. You can change it later next to the file name.</p><div class="version-choices">${order
+          .map(
+            v =>
+              `<button type="button" data-version="${html(v)}"${v === preferred ? ' class="primary"' : ''}>${html((GAME_VERSIONS[v] || v).replace(' (latest)', ''))}${v === preferred ? ` <small>· ${note}</small>` : ''}</button>`,
+          )
+          .join('')}</div>`,
+      );
+      dialog.querySelectorAll('[data-version]').forEach(
+        b =>
+          (b.onclick = () => {
+            chosen = b.dataset.version;
+            closeDialog(dialog);
+          }),
+      );
+      dialog.addEventListener('close', () => resolve(chosen || preferred), { once: true });
+    });
+  }
   function bundledVersionOf(data) {
     return Object.keys(bundled).find(v => bundled[v] === data) || null;
   }
@@ -3484,7 +3520,7 @@
       fail(e);
     }
   }
-  async function load(file) {
+  async function load(file, { demo = false } = {}) {
     if (!file) return;
     if (!guard()) {
       $('save-file').value = '';
@@ -3503,19 +3539,23 @@
       const next = new ERCore.Save(await file.arrayBuffer(), catalog);
       // Switch to the build this save most likely comes from (bundled data only).
       let switched = null,
-        unsure = false;
-      if (bundledVersionOf(catalog)) {
-        const guess = ERCore.detectVersion(next, bundled, file.name, {
+        asked = null;
+      if (!demo && bundledVersionOf(catalog)) {
+        const evidence = ERCore.versionEvidence(next, bundled, file.name, {
           '2.65.4.1b': '2.65.4',
           '2.65.5': '2.65.5.2b',
         });
-        unsure = !guess;
-        if (guess && bundled[guess.version] !== catalog) {
-          switched = guess;
-          catalog = next.catalog = bundled[guess.version];
-          buildLists();
-          rememberVersion(guess.version);
+        let version = evidence.version;
+        // Nothing in the save settles it: ask, rather than quietly using the last choice.
+        if (!version && evidence.candidates.length > 1) {
+          version = asked = await askVersion(evidence.candidates);
         }
+        if (version && bundled[version] !== catalog) {
+          if (!asked) switched = evidence;
+          catalog = next.catalog = bundled[version];
+          buildLists();
+        }
+        if (version) rememberVersion(version);
       }
       drawVersionPickers();
       cancelSearch();
@@ -3550,15 +3590,9 @@
         save.damaged.length
           ? 'This save has checksum errors; editing is disabled.'
           : switched
-            ? `Save loaded and checked. Switched to Elite Redux ${switched.version} data: ${
-                switched.reason === 'moves'
-                  ? 'your Pokémon know moves that only exist in that build'
-                  : switched.reason === 'filename'
-                    ? 'the file name says so'
-                    : 'your party’s stats match that build'
-              }. Change it next to the file name if that’s wrong.`
-            : unsure
-              ? `Save loaded and checked, using Elite Redux ${bundledVersionOf(catalog)} data. The save doesn’t say which build it comes from, so check Game version next to the file name: randomized abilities depend on it.`
+            ? `Save loaded and checked. Switched to Elite Redux ${switched.version} data: ${VERSION_REASONS[switched.reason] || 'the save matches that build'}. Change it next to the file name if that’s wrong.`
+            : asked
+              ? `Save loaded and checked with Elite Redux ${asked} data. You can change it next to the file name.`
               : 'Save loaded and checked.',
         !!save.damaged.length,
       );
@@ -3575,7 +3609,9 @@
   $('backup-button').onclick = backup;
   $('export-button').onclick = () => exportSave();
   $('demo-button').onclick = () =>
-    load(new File([ERCore.demo(catalog)], 'Demo.sav', { type: 'application/octet-stream' }));
+    load(new File([ERCore.demo(catalog)], 'Demo.sav', { type: 'application/octet-stream' }), {
+      demo: true,
+    });
   $('undo-button').onclick = () => {
     if (guard()) {
       resetSearch();

@@ -127,7 +127,13 @@ async function runEngine(engine) {
       mimeType: 'application/octet-stream',
       buffer: sample,
     });
+    // The sample holds nothing unique to one build, so the editor asks which version it is from.
+    stage = `${engine}: version question`;
+    await page.locator('dialog[open] [data-version]').first().waitFor();
+    await checkDialog(page, 'dialog[open]');
+    await page.locator('dialog[open] [data-version="2.65.5.2b"]').tap();
     await page.locator('#pokemon-form').waitFor();
+    assert.equal(await page.locator('#workspace-version').inputValue(), '2.65.5.2b');
     for (const [width, height] of sizes) {
       await page.setViewportSize({ width, height });
       for (const tab of ['pokemon', 'randomizer', 'settings', 'review']) {

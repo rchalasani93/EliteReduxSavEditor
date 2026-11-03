@@ -118,7 +118,7 @@ test('game version is detected from moves, then the file name', () => {
   // Move evidence wins over a file name that names the older build.
   assert.deepEqual(core.detectVersion(plain, versions, 'redux 2.65.4.sav', aliases), {
     version: '2.65.4.11b',
-    reason: 'moves',
+    reason: 'pokemon',
   });
 });
 
@@ -131,4 +131,46 @@ test('catalog carries move details and bag pockets', () => {
   assert.equal(byName('items', 'Master Ball').pocket, 'ball');
   assert.equal(byName('items', 'Potion').pocket, 'medicine');
   assert.ok(byName('items', 'Potion').desc);
+});
+
+test('2.65.5.2b is recognised from what the save holds, without a version in the name', () => {
+  const patches = require('../src/catalog-patches.json');
+  const v5 = core.applyCatalogPatch(catalog, patches['2.65.5.2b']);
+  const versions = { '2.65.5.2b': v5, '2.65.4.11b': latest, '2.65.4': catalog };
+  const fresh = () => new core.Save(fixture(), latest);
+  // Nothing build-specific: no guess, and the editor asks.
+  const plain = fresh();
+  assert.equal(core.detectVersion(plain, versions, 'pokemon.sav'), null);
+  assert.ok(core.versionEvidence(plain, versions, 'pokemon.sav').candidates.length > 1);
+  // A species only 2.65.5 has.
+  const s1 = new core.Save(fixture(), v5);
+  s1.createMon({ kind: 'box', box: 0 }, { species: 2324, level: 5, moves: [1] });
+  const bagon = new core.Save(s1.export(), v5);
+  assert.deepEqual(core.detectVersion(bagon, versions, 'pokemon.sav'), {
+    version: '2.65.5.2b',
+    reason: 'pokemon',
+  });
+  // A Pokédex entry only 2.65.5 has.
+  const s2 = new core.Save(fixture(), v5);
+  s2.editPokedex({ 1143: 'seen' });
+  assert.deepEqual(core.detectVersion(new core.Save(s2.export(), v5), versions, 'x.sav'), {
+    version: '2.65.5.2b',
+    reason: 'pokedex',
+  });
+  // An item only 2.65.5 has, owned in the bag.
+  const s3 = new core.Save(fixture(), v5);
+  s3.editItems({ 440: true });
+  assert.deepEqual(core.detectVersion(new core.Save(s3.export(), v5), versions, 'x.sav'), {
+    version: '2.65.5.2b',
+    reason: 'items',
+  });
+  // Ice Wall with more PP than 2.65.4.x allows.
+  const iceWall = Object.values(v5.moves).find(m => m.name === 'Ice Wall');
+  assert.ok(iceWall.pp > latest.moves[iceWall.id].pp);
+  const s4 = new core.Save(fixture(), v5);
+  s4.createMon({ kind: 'party' }, { species: 25, level: 5, moves: [iceWall.id] });
+  assert.deepEqual(core.detectVersion(new core.Save(s4.export(), v5), versions, 'x.sav'), {
+    version: '2.65.5.2b',
+    reason: 'pokemon',
+  });
 });

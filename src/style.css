@@ -2772,3 +2772,17 @@ label.field > span {
     gap: 8px;
   }
 }
+.version-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.version-choices button {
+  min-height: 48px;
+  text-align: left;
+  font-size: 15px;
+}
+.version-choices button small {
+  font-size: 12px;
+  opacity: 0.75;
+}

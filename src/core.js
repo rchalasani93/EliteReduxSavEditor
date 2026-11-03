@@ -354,22 +354,53 @@
       return n;
     });
   }
-  // Guess which bundled ROM build a save comes from. Saves don't record it, so
-  // weigh hard evidence first: a move or species ID that exists in only some
-  // builds, then a version written in the file name, then party stats cached by
-  // the game, which follow that build's base stats.
-  function detectVersion(save, versions, filename = '', aliases = {}) {
+  // Guess which bundled ROM build a save comes from. Saves don't record it (every 2.65.x build
+  // writes the same save-version number, 1049), so the save's contents are weighed instead. Each
+  // check keeps only the builds that could have produced what the save holds:
+  //  - pokemon: every species, move and held item exists in that build, and no party Pokémon's
+  //    move has more PP than that build allows (Ice Wall has 5 PP in 2.65.4 and 10 in 2.65.5;
+  //    boxed Pokémon don't store PP);
+  //  - items: every item the bag owns exists in that build;
+  //  - pokedex: no seen entry is one that only other builds have (2.65.5 adds #1143-1148 and more);
+  //  - stats: party Pokémon's cached stats follow that build's base stats.
+  // A check that would rule out every build is ignored (the save was probably edited), and a
+  // version written in the file name is consulted before cached stats.
+  function versionEvidence(save, versions, filename = '', aliases = {}) {
     const names = Object.keys(versions);
+    let candidates = names,
+      reason = null;
+    const narrow = (why, test) => {
+      if (candidates.length < 2) return;
+      const kept = candidates.filter(test);
+      if (kept.length && kept.length < candidates.length) {
+        candidates = kept;
+        reason = why;
+      }
+    };
     const mons = [...save.party()];
     for (let b = 0; b < 26; b++) for (const m of save.box(b)) if (m.species) mons.push(m);
-    let candidates = names.filter(v =>
-      mons.every(
-        m => versions[v].species[m.species] && m.moves.every(id => !id || versions[v].moves[id]),
-      ),
+    narrow('pokemon', v => {
+      const data = versions[v];
+      return mons.every(
+        m =>
+          data.species[m.species] &&
+          (!m.heldItem || data.items[m.heldItem]) &&
+          m.moves.every((id, i) => !id || (data.moves[id] && !(m.pp?.[i] > maxPP(data.moves[id])))),
+      );
+    });
+    const owned = save.ownedItems();
+    narrow('items', v => owned.every(id => versions[v].items[id]));
+    const dex = save.pokedex(),
+      numbers = Object.fromEntries(
+        names.map(v => [v, new Set(pokedexList(versions[v]).map(e => e.no))]),
+      );
+    const seen = [];
+    for (let n = 1; n <= DEX_BYTES * 8; n++) if (dex.seen(n)) seen.push(n);
+    narrow('pokedex', v =>
+      seen.every(n => numbers[v].has(n) || !candidates.some(o => numbers[o].has(n))),
     );
     if (candidates.length === 1 && names.length > 1)
-      return { version: candidates[0], reason: 'moves' };
-    if (!candidates.length) candidates = names;
+      return { version: candidates[0], reason, candidates };
     const normalized = String(filename)
       .toLowerCase()
       .replace(/[_\- ]+/g, '.');
@@ -380,13 +411,13 @@
       const after = normalized[at + name.length];
       if (after !== undefined && /[0-9a-z]/.test(after)) continue; // 2.65.4 inside 2.65.4.11b
       const version = aliases[name] || name;
-      if (candidates.includes(version)) return { version, reason: 'filename' };
+      if (candidates.includes(version)) return { version, reason: 'filename', candidates };
     }
     const party = save.party().filter(m => m.species && m.stats);
     if (party.length) {
       const opts = save.options(),
         zeroIV = opts.difficulty === 3 && save.flag(2893);
-      const fits = candidates.filter(v =>
+      narrow('stats', v =>
         party.every(m => {
           const sp = versions[v].species[m.species];
           return (
@@ -397,9 +428,14 @@
           );
         }),
       );
-      if (fits.length === 1 && candidates.length > 1) return { version: fits[0], reason: 'stats' };
     }
-    return null;
+    if (candidates.length === 1 && names.length > 1)
+      return { version: candidates[0], reason, candidates };
+    return { version: null, reason: null, candidates };
+  }
+  function detectVersion(save, versions, filename = '', aliases = {}) {
+    const r = versionEvidence(save, versions, filename, aliases);
+    return r.version ? { version: r.version, reason: r.reason } : null;
   }
   function randomU32() {
     const c = globalThis.crypto;
@@ -1838,6 +1874,7 @@
     encode,
     calcStats,
     detectVersion,
+    versionEvidence,
     expForLevel,
     levelForExp,
     maxPP,
