@@ -801,6 +801,8 @@
   // ---- Species finder: every species that can roll a set of abilities ------------------------
   const finder = {
     targets: ['', '', '', ''],
+    // '' = the active ability may come from any slot; '0'-'2' lock it to that slot.
+    slot: '',
     type: '',
     minTotal: 0,
     results: [],
@@ -946,7 +948,7 @@
         worker: new Worker(url),
         busy: false,
         complete: false,
-        target: RESULTS_PER_PAGE * 5,
+        target: RESULTS_PER_PAGE * 2,
         started: false,
       };
       const request = {
@@ -955,7 +957,7 @@
         config: catalog.config,
         targets,
         matchMode: 'any',
-        lockedSlot: null,
+        lockedSlot: finder.run.lockedSlot ?? null,
         keepGender: false,
         pid: d.pid,
         limit: RESULTS_PER_PAGE,
@@ -1036,7 +1038,8 @@
       !Number.isInteger(pid) ||
       pid < 0 ||
       pid > 0xffffffff ||
-      ![0, 1, 2].includes(slot)
+      ![0, 1, 2].includes(slot) ||
+      (finder.run.lockedSlot !== null && slot !== finder.run.lockedSlot)
     )
       return null;
     const result = ERRng.evaluate(
@@ -1053,14 +1056,14 @@
     return { species, pid, slot, ...result };
   }
   let finderDrawTimer = 0;
-  // Pages arrive once per layout; redraw at most a few times a second.
+  // Pages arrive once per layout; redraw at most about once a second while searching.
   function scheduleFinderDraw() {
     if (finderDrawTimer) return;
     finderDrawTimer = setTimeout(() => {
       finderDrawTimer = 0;
       drawFinderResults();
       finderStatus();
-    }, 250);
+    }, 800);
   }
   function startFinder() {
     try {
@@ -1074,12 +1077,16 @@
         $('rng-code').textContent +
         `\nself.onmessage=async e=>{try{for await(const page of ERRng.findSpecies(e.data))self.postMessage({kind:'page',value:page});self.postMessage({kind:'end'});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
       const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      // Leave two cores for the page and the rest of the device, so the editor stays
+      // responsive while the search runs.
       const count = Math.max(
         1,
-        Math.min(8, (navigator.hardwareConcurrency || 4) - 1, groups.length),
+        Math.min(6, (navigator.hardwareConcurrency || 4) - 2, groups.length),
       );
+      const lockedSlot = finder.slot === '' ? null : +finder.slot;
       const run = {
         targets,
+        lockedSlot,
         options: opts,
         url,
         workers: [],
@@ -1135,6 +1142,7 @@
           options: opts,
           config: catalog.config,
           targets,
+          lockedSlot,
           pid: crypto.getRandomValues(new Uint32Array(1))[0],
         });
       }
@@ -1150,7 +1158,7 @@
     $('editor-panel').innerHTML =
       `<div class="page-heading"><h1>Optimal specimen.</h1><p>Pick up to four abilities and innates and see every Pokémon that can roll all of them at once. Open one for its rolls and every PID that gives them, then enlist it into your party or a box.</p></div>${
         opts.abilityRng && opts.innateRng
-          ? '<p class="notice">Your save has the ability and innate randomizers on, so most Pokémon can roll most combinations. One or two abilities take seconds; three or four can take a few minutes, and results appear as they are found.</p>'
+          ? '<p class="notice">Your save has the ability and innate randomizers on, so most Pokémon can roll most combinations. One or two abilities take a second or two, three take seconds, and four can take a minute on a phone; results appear as they are found.</p>'
           : `<div class="notice warning randomizer-off"><p>${on ? `Only the ${opts.abilityRng ? 'ability' : 'innate'} randomizer is on in this save` : 'The ability and innate randomizers are off in this save'}, so ${on ? 'fewer Pokémon can roll these' : 'this lists only the Pokémon that have these abilities naturally'}. Both are game options; turn them on here to match a randomized run.</p><div class="actions-inline">${opts.abilityRng ? '' : `<button type="button" data-enable-rng="abilityRng" ${save.damaged.length ? 'disabled' : ''}>Turn on ability randomizer</button>`}${opts.innateRng ? '' : `<button type="button" data-enable-rng="innateRng" ${save.damaged.length ? 'disabled' : ''}>Turn on innate randomizer</button>`}</div></div>`
       }
     <section class="panel"><div class="panel-heading"><h2>WHAT YOU WANT</h2><span>Any order · abilities and innates</span></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span>Ability ${i + 1}</span><input id="finder-target-${i}" list="list-abilities" placeholder="${i ? 'Optional' : 'Required'}" autocomplete="off"></label>`).join('')}</div>
@@ -1162,10 +1170,12 @@
       )
       .join(
         '',
-      )}</select></label>${numberField('Minimum base stat total', 'finderMin', finder.minTotal, 0, 1000)}<span></span></div>
+      )}</select></label>${numberField('Minimum base stat total', 'finderMin', finder.minTotal, 0, 1000)}<label class="field"><span>Ability slot</span><select id="finder-slot"><option value="">Any slot</option><option value="0">Slot 1 only</option><option value="1">Slot 2 only</option><option value="2">Slot 3 only</option></select></label></div>
     <div class="search-control"><button id="finder-start" class="primary" ${save.damaged.length ? 'disabled' : ''}>Find species</button><button id="finder-stop" hidden>Stop</button></div><div class="search-progress" id="finder-progress" aria-live="polite"></div><progress id="finder-meter" max="100" value="0" hidden></progress></section><div id="finder-results"></div>`;
     finder.targets.forEach((t, i) => ($('finder-target-' + i).value = t));
     $('finder-type').value = finder.type;
+    $('finder-slot').value = finder.slot;
+    $('finder-slot').onchange = e => (finder.slot = e.target.value);
     const minInput = document.querySelector('[name="finderMin"]');
     minInput.id = 'finder-min';
     for (let i = 0; i < 4; i++)
@@ -1222,9 +1232,10 @@
         if (
           d.session &&
           !d.session.complete &&
-          (d.page + 1) * RESULTS_PER_PAGE > d.results.length
+          (d.page + 2) * RESULTS_PER_PAGE > d.results.length
         ) {
-          d.session.target = Math.max(d.session.target, (d.page + 5) * RESULTS_PER_PAGE);
+          // Keep one page ready beyond the one shown; searching further ahead only costs CPU.
+          d.session.target = Math.max(d.session.target, (d.page + 2) * RESULTS_PER_PAGE);
           searchSpecimenPids();
         }
         return drawSpecimen();

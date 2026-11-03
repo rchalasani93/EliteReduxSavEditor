@@ -174,3 +174,59 @@ test('2.65.5.2b is recognised from what the save holds, without a version in the
     reason: 'pokemon',
   });
 });
+
+// Three or more targets use the block search; its answers must match the exhaustive scan.
+const v2655 = core.applyCatalogPatch(catalog, patches['2.65.5.2b']);
+const ability2655 = name => Object.values(v2655.abilities).find(a => a.name === name).id;
+const threeTargets = ['Intimidate', 'Speed Boost', 'Levitate'].map(ability2655);
+const allPages = async request => {
+  const found = [];
+  for await (const page of rng.searchPages(request)) found.push(...page.answers);
+  return found;
+};
+
+test('block search finds every PID the exhaustive scan found for three targets', async () => {
+  const squirtle = v2655.species[7];
+  const request = {
+    species: squirtle,
+    options: { abilityRng: 1, innateRng: 1, typeRng: 0 },
+    config: v2655.config,
+    targets: [...threeTargets, null],
+    matchMode: 'any',
+    limit: 100,
+    pid: 5,
+  };
+  const found = (await allPages(request)).map(r => `${r.pid.toString(16)}:${r.slot}`).sort();
+  // From the exhaustive anchor scan used before the block search.
+  assert.deepEqual(found, ['93323301:1', 'e117883e:0', 'f838432b:1', 'f8f6e412:2']);
+  const slot2 = (await allPages({ ...request, lockedSlot: 1 })).map(r => r.slot);
+  assert.deepEqual(slot2, [1, 1]);
+});
+
+test('species finder honours a locked ability slot and verifies three-target results', async () => {
+  const groups = rng.groupLayouts(Object.values(v2655.species)).filter((_, i) => i % 60 === 1);
+  const options = { abilityRng: 1, innateRng: 1, typeRng: 0 };
+  const run = async lockedSlot => {
+    const found = [];
+    for await (const page of rng.findSpecies({
+      groups,
+      options,
+      config: v2655.config,
+      targets: threeTargets,
+      lockedSlot,
+      pid: 1,
+    }))
+      found.push(...page.found);
+    return found;
+  };
+  const any = await run(null);
+  assert.ok(any.length > 10);
+  for (const r of any) {
+    const e = rng.evaluate(v2655.species[r.species], r.pid, r.slot, options, v2655.config);
+    assert.ok(hasAll(e, threeTargets));
+  }
+  const locked = await run(2);
+  assert.ok(locked.length > 0);
+  assert.ok(locked.every(r => r.slot === 2));
+  await assert.rejects(() => run(3).then(() => {}), /Invalid ability slot/);
+});
