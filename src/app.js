@@ -4,11 +4,15 @@
     html = ERHtml.escape;
   const builtin = JSON.parse($('catalog').textContent);
   // Each bundled game version: the base data, plus newer builds applied as patches over it.
-  const GAME_VERSIONS = { '2.65.4.11b': '2.65.4.11b (latest)', '2.65.4': '2.65.4 / 2.65.4.1b' };
+  const GAME_VERSIONS = {
+    '2.65.5.2b': '2.65.5.2b (latest)',
+    '2.65.4.11b': '2.65.4.11b',
+    '2.65.4': '2.65.4 / 2.65.4.1b',
+  };
   const bundled = { '2.65.4': builtin };
   for (const [version, patch] of Object.entries(JSON.parse($('catalog-patches').textContent)))
     bundled[version] = ERCore.applyCatalogPatch(builtin, patch);
-  const LATEST_VERSION = '2.65.4.11b';
+  const LATEST_VERSION = '2.65.5.2b';
   function rememberedVersion() {
     try {
       return localStorage.getItem('er-game-version');
@@ -3233,7 +3237,7 @@
         .join(
           '',
         )}</div><div class="form-footer"><p>Stat-affecting settings also refresh party stat caches.</p><div class="actions-inline"><button type="button" data-discard>Discard draft</button><button type="submit" class="primary">Apply game settings</button></div></div></section></fieldset></form>
-    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision, so choose your game version next to the file name. 2.65.4 and 2.65.4.11b are bundled; other builds need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled ${LATEST_VERSION} data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
+    <section class="panel"><div class="panel-heading"><h2>GAME DATA PROFILE</h2><span>${html(catalog.version)}</span></div><p class="field-help" style="margin-top:0">${Object.keys(catalog.species).length.toLocaleString()} species · ${Object.keys(catalog.moves).length} moves · ${Object.keys(catalog.abilities).length} abilities · ${catalog.config.banned.length} randomizer exclusions. Save files do not identify the exact ROM revision, so choose your game version next to the file name. 2.65.4, 2.65.4.11b and 2.65.5.2b are bundled; other builds need matching data.</p><p class="field-help">For another build, import a generated catalog with explicit randomizer configuration. Nextdex JSON is accepted for builds using the same 38 blocked abilities as 2.65.4. Verify the profile against your ROM before using ability searches.</p><div class="form-footer"><div class="actions-inline"><button id="import-catalog">Import game data JSON</button><button id="reset-catalog">Use bundled ${LATEST_VERSION} data</button></div><span class="ev-total">All data stays local</span></div><input id="catalog-file" type="file" accept=".json,application/json" hidden></section>`;
     const form = $('settings-form');
     bindDirty(form);
     form.onsubmit = e => {
@@ -3498,9 +3502,14 @@
     try {
       const next = new ERCore.Save(await file.arrayBuffer(), catalog);
       // Switch to the build this save most likely comes from (bundled data only).
-      let switched = null;
+      let switched = null,
+        unsure = false;
       if (bundledVersionOf(catalog)) {
-        const guess = ERCore.detectVersion(next, bundled, file.name, { '2.65.4.1b': '2.65.4' });
+        const guess = ERCore.detectVersion(next, bundled, file.name, {
+          '2.65.4.1b': '2.65.4',
+          '2.65.5': '2.65.5.2b',
+        });
+        unsure = !guess;
         if (guess && bundled[guess.version] !== catalog) {
           switched = guess;
           catalog = next.catalog = bundled[guess.version];
@@ -3548,7 +3557,9 @@
                     ? 'the file name says so'
                     : 'your party’s stats match that build'
               }. Change it next to the file name if that’s wrong.`
-            : 'Save loaded and checked.',
+            : unsure
+              ? `Save loaded and checked, using Elite Redux ${bundledVersionOf(catalog)} data. The save doesn’t say which build it comes from, so check Game version next to the file name: randomized abilities depend on it.`
+              : 'Save loaded and checked.',
         !!save.damaged.length,
       );
     } catch (e) {

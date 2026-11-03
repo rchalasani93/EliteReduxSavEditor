@@ -508,3 +508,31 @@ test('Add many can leave the Pokédex untouched', () => {
   assert.equal(s.createMany(list, { recordDex: false }), 40);
   assert.deepEqual(s.pokedex().counts(), before);
 });
+
+test('2.65.5.2b data: ROM-checked randomizer config, new species and abilities', () => {
+  const patches = require('../src/catalog-patches.json');
+  const rng = require('../src/rng.js');
+  const v5 = core.applyCatalogPatch(catalog, patches['2.65.5.2b']);
+  // 1,084 abilities (IDs 0-1083); the ROM bans Versatile (1079) from the randomizer too.
+  assert.equal(v5.config.modulus, 1083);
+  assert.equal(v5.abilities[1083].name, 'High Rise');
+  assert.equal(v5.config.banned.length, 39);
+  assert.ok(v5.config.banned.includes(1079));
+  // New species at the end, two reused slots, existing IDs unchanged.
+  assert.equal(v5.species[2334].name, 'Cauldrican');
+  assert.equal(v5.species[2126].key, 'SPECIES_AMICABULL');
+  assert.equal(v5.species[150].name, 'Mewtwo');
+  // Abilities come from the ROM where Nextdex's 2.65.5 data points at neighbouring IDs.
+  const swoobat = Object.values(v5.species).find(s => s.name === 'Swoobat');
+  assert.equal(v5.abilities[swoobat.abilities[0]].name, 'Echolocation');
+  // Miraidon at PID 7B007685, slot 2, from a 2.65.5.2b save with both randomizers on.
+  const options = { abilityRng: 1, innateRng: 1, typeRng: 0 };
+  const r = rng.evaluate(v5.species[1008], 0x7b007685, 1, options, v5.config);
+  assert.equal(v5.abilities[r.ability].name, 'Archer');
+  assert.deepEqual(
+    r.innates.map(id => v5.abilities[id].name),
+    ['Stalwart', 'Libero', 'Technician'],
+  );
+  // The new items carry their bag pocket.
+  assert.equal(v5.items[440].pocket, 'mega');
+});
