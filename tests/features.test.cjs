@@ -557,3 +557,20 @@ test('Add many and Megas & Primals can create shiny Pokémon', () => {
     ],
   );
 });
+
+test('trimming the Pokédex unmarks seen-only entries before caught ones', () => {
+  const cat2 = core.applyCatalogPatch(catalog, require('../src/catalog-patches.json')['2.65.5.2b']);
+  const save = new core.Save(fixture(), cat2);
+  const numbers = core.pokedexList(cat2).map(e => e.no);
+  const extra = numbers[500];
+  save.catchInPokedex(numbers.slice(0, 1000).filter(n => n !== extra));
+  // The editor refuses to reach 1,000 seen, so set the seen bit directly, as a game save can.
+  const DEX_SEEN = 2 * 4084 + 0x2e54,
+    at = DEX_SEEN + ((extra - 1) >>> 3);
+  save.write(at, [save.read(at, 1)[0] | (1 << ((extra - 1) & 7))]);
+  assert.deepEqual(save.pokedex().counts(), { seen: 1000, caught: 999 });
+  const removed = save.trimPokedex();
+  assert.deepEqual(removed, [extra]);
+  assert.equal(save.pokedex().caught(numbers[999]), 1);
+  assert.deepEqual(save.pokedex().counts(), { seen: 999, caught: 999 });
+});

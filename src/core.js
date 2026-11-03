@@ -1130,11 +1130,14 @@
       const d = this.pokedex();
       let over = d.counts().seen - DEX_LIMIT;
       const removed = [];
-      for (let n = DEX_BYTES * 8; n >= 1 && over > 0; n--)
-        if (d.seen(n)) {
-          removed.push(n);
-          over--;
-        }
+      // Entries only seen go first (nothing caught is lost), then the highest numbers.
+      for (const onlySeen of [true, false])
+        for (let n = DEX_BYTES * 8; n >= 1 && over > 0; n--)
+          if (d.seen(n) && (!onlySeen || !d.caught(n)) && !removed.includes(n)) {
+            removed.push(n);
+            over--;
+          }
+      removed.sort((a, b) => b - a);
       if (removed.length) this.editPokedex(Object.fromEntries(removed.map(n => [n, 'none'])));
       return removed.reverse();
     }

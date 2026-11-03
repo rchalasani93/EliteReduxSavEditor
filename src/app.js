@@ -634,7 +634,7 @@
       $('health-banner').classList.add('warn');
       $('health-banner').insertAdjacentHTML(
         'beforeend',
-        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark the highest ${seenTotal - limit} to keep ${limit}</button></span>`,
+        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark ${seenTotal - limit} to keep ${limit} (seen-only entries first)</button></span>`,
       );
       $('trim-dex').onclick = () => {
         if (!guard()) return;
@@ -642,7 +642,7 @@
         apply(() => (removed = save.trimPokedex()), `Pokédex trimmed to ${limit} seen.`);
         if (removed.length)
           notify(
-            `Pokédex trimmed to ${limit} seen: unmarked #${removed[0]} to #${removed[removed.length - 1]}.`,
+            `Pokédex trimmed to ${limit} seen: unmarked ${removed.length === 1 ? `#${removed[0]}` : `${removed.length} entries, #${removed[removed.length - 1]} to #${removed[0]}`}.`,
           );
       };
     }
