@@ -47,8 +47,36 @@
   const RESULTS_PER_PAGE = 12,
     PREFETCH_PAGES = 10;
   const SHININESS = ['Normal', 'Star shiny', 'Square shiny', 'Special palette'];
-  const pokemonIcons = JSON.parse($('pokemon-icons').textContent).images,
+  const iconData = $('pokemon-icons'),
+    pokemonIcons = JSON.parse(iconData.textContent).images || {},
     searchDrafts = new Map();
+  // On the hosted site the sprites are a separate file (data-src) so the page itself downloads
+  // and parses quickly; it is fetched in the background and placeholders are filled when it
+  // arrives. The offline editor has them embedded. Only the page's own sprite file is fetched.
+  let iconsText = null;
+  const iconsReady = (() => {
+    const src = iconData.dataset.src || '';
+    if (!/^icons-[a-f0-9]{8,64}\.json$/.test(src)) return Promise.resolve();
+    const signal =
+      typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(60_000) : undefined;
+    return fetch(src, { credentials: 'same-origin', signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`Sprites: HTTP ${r.status}`);
+        return r.text();
+      })
+      .then(text => {
+        if (text.length > 20_000_000) throw new Error('Sprite file is too large.');
+        const data = JSON.parse(text);
+        if (!data || typeof data.images !== 'object') throw new Error('Sprite file is not valid.');
+        for (const [key, value] of Object.entries(data.images))
+          if (/^SPECIES_[A-Z0-9_]+$/.test(key) && typeof value === 'string')
+            pokemonIcons[key] = value;
+        iconsText = text;
+        iconUrls.clear();
+        fillIcons();
+      })
+      .catch(() => {}); // Sprites are decoration: without them the editor shows placeholders.
+  })();
   const typeColors = [
     '#77796a',
     '#ac634c',
@@ -82,6 +110,38 @@
     catalogControlId = 0;
   // Every word of the query must appear, in any order: "primal cascoon" finds Cascoon Primal.
   const matchesQuery = (text, query) => query.split(/\s+/).every(word => text.includes(word));
+  // Run non-urgent work when the browser is idle (or soon, where idle callbacks are missing).
+  const whenIdle = fn =>
+    typeof requestIdleCallback === 'function'
+      ? requestIdleCallback(fn, { timeout: 1500 })
+      : setTimeout(fn, 200);
+  const cancelIdle = id =>
+    typeof cancelIdleCallback === 'function' ? cancelIdleCallback(id) : clearTimeout(id);
+  // Long lists: draw the first rows at once and the rest a batch per frame, so the page responds
+  // straight away. A newer draw of the same container cancels an unfinished one.
+  function renderRows(
+    container,
+    rows,
+    row,
+    { empty = '', after = '', first = 48, batch = 120 } = {},
+  ) {
+    const job = (container._rowsJob = (container._rowsJob || 0) + 1);
+    if (!rows.length) {
+      container.innerHTML = empty;
+      return;
+    }
+    const part = (from, to) =>
+      rows.slice(from, to).map(row).join('') + (to >= rows.length ? after : '');
+    container.innerHTML = part(0, first);
+    let at = first;
+    const next = () => {
+      if (container._rowsJob !== job || !container.isConnected || at >= rows.length) return;
+      container.insertAdjacentHTML('beforeend', part(at, at + batch));
+      at += batch;
+      if (at < rows.length) requestAnimationFrame(next);
+    };
+    if (at < rows.length) requestAnimationFrame(next);
+  }
   const touchLayout = () => window.matchMedia('(max-width: 760px), (any-pointer: coarse)').matches;
   const catalogLabel = kind =>
     ({ species: 'species', moves: 'move', abilities: 'ability', items: 'item' })[kind] || kind;
@@ -368,19 +428,42 @@
             markup: `<button type="button" class="picker-option" data-target-ability="${html(a.id)}"><span><b>${html(a.name)}</b><small>${html(a.desc || 'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`,
           }));
       }
-      list.innerHTML = entries
-        .map(e => {
-          indexes[kind].set(e.name.toLocaleLowerCase(), e.id);
-          indexes[kind].set(display(e).toLocaleLowerCase(), e.id);
+      for (const e of entries) {
+        indexes[kind].set(e.name.toLocaleLowerCase(), e.id);
+        indexes[kind].set(display(e).toLocaleLowerCase(), e.id);
+      }
+    }
+    scheduleDatalists();
+  }
+  // The typed-suggestion lists hold about 5,000 options, so they are built after the page has
+  // painted, or at once when a field that uses them is focused first.
+  let datalistsBuilt = false,
+    datalistJob = 0;
+  function buildDatalists() {
+    cancelIdle(datalistJob);
+    if (datalistsBuilt) return;
+    datalistsBuilt = true;
+    for (const kind of ['species', 'moves', 'abilities', 'items']) {
+      const list = document.createElement('datalist');
+      list.id = `list-${kind}`;
+      list.innerHTML = catalogEntries[kind]
+        .map(({ value: e }) =>
           // Move suggestions carry their type and numbers as the option label.
-          return kind === 'moves' && e.id
+          kind === 'moves' && e.id
             ? `<option value="${html(display(e))}" label="${html(`${(e.types || []).map(t => catalog.types[t]).join('/')} · ${moveStatsText(e, false)}`)}"></option>`
-            : `<option value="${html(display(e))}"></option>`;
-        })
+            : `<option value="${html(display(e))}"></option>`,
+        )
         .join('');
       document.body.append(list);
     }
   }
+  function scheduleDatalists() {
+    document.querySelectorAll('datalist').forEach(e => e.remove());
+    datalistsBuilt = false;
+    cancelIdle(datalistJob);
+    datalistJob = whenIdle(buildDatalists);
+  }
+  document.addEventListener('focusin', e => e.target.matches?.('input[list]') && buildDatalists());
   buildLists();
   const numberField = (label, name, value, min, max) =>
     `<label class="field"><span>${html(label)}</span><input name="${html(name)}" type="number" value="${html(value)}" min="${html(min)}" max="${html(max)}" required></label>`;
@@ -395,9 +478,26 @@
           `<span class="type" style="--type:${typeColors[i] || '#777'}">${html(catalog.types[i] || 'None')}</span>`,
       )
       .join('');
+  // Each sprite's data is checked and escaped once, then reused however often a list is redrawn.
+  const iconUrls = new Map();
+  function iconUrl(key) {
+    if (!iconUrls.has(key)) iconUrls.set(key, html(ERHtml.pngSource(pokemonIcons[key])));
+    return iconUrls.get(key);
+  }
+  const iconImage = image =>
+    `<img src="${image}" alt="" width="64" height="64" decoding="async" loading="lazy">`;
   function pokemonIcon(species) {
-    const image = ERHtml.pngSource(pokemonIcons[species?.key]);
-    return `<span class="mon-emblem" aria-hidden="true">${image ? `<img src="${html(image)}" alt="" width="64" height="64" decoding="async">` : '<span class="unknown-mon-icon"></span>'}</span>`;
+    const image = species?.key ? iconUrl(species.key) : '';
+    // A placeholder remembers its species so it can be filled once the sprite file arrives.
+    return `<span class="mon-emblem" aria-hidden="true">${image ? iconImage(image) : `<span class="unknown-mon-icon"${species?.key && !iconsText && iconData.dataset.src ? ` data-icon="${html(species.key)}"` : ''}></span>`}</span>`;
+  }
+  // Swap placeholders for sprites in place, without redrawing (and losing typing in) any form.
+  function fillIcons() {
+    document.querySelectorAll('.unknown-mon-icon[data-icon]').forEach(el => {
+      const image = iconUrl(el.dataset.icon);
+      if (image) el.outerHTML = iconImage(image);
+      else el.removeAttribute('data-icon');
+    });
   }
   function searchDraft() {
     const key = `${ref?.kind}:${ref?.box ?? ''}:${ref?.slot}`;
@@ -2543,15 +2643,13 @@
       drawBag();
     };
     const drawBag = () => {
-      const list = shown();
-      $('bag-list').innerHTML = list.length
-        ? list
-            .map(
-              i =>
-                `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"${i.desc ? ` title="${html(i.desc)}"` : ''}><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
-            )
-            .join('')
-        : '<p class="field-help">No items match.</p>';
+      renderRows(
+        $('bag-list'),
+        shown(),
+        i =>
+          `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"${i.desc ? ` title="${html(i.desc)}"` : ''}><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
+        { empty: '<p class="field-help">No items match.</p>' },
+      );
       pending();
     };
     const setItem = (id, value) => {
@@ -3144,18 +3242,21 @@
     };
     const draw = () => {
       const list = shown();
-      $('dex-list').innerHTML = list.length
-        ? list
-            .slice(0, 600)
-            .map(sp => {
-              const st = stateOf(sp.no);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
-            })
-            .join('') +
-          (list.length > 600
-            ? `<p class="field-help">Showing 600 of ${list.length}. Search to narrow the list; bulk buttons apply to all ${list.length}.</p>`
-            : '')
-        : '<p class="field-help">No species match.</p>';
+      renderRows(
+        $('dex-list'),
+        list.slice(0, 600),
+        sp => {
+          const st = stateOf(sp.no);
+          return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+        },
+        {
+          empty: '<p class="field-help">No species match.</p>',
+          after:
+            list.length > 600
+              ? `<p class="field-help">Showing 600 of ${list.length}. Search to narrow the list; bulk buttons apply to all ${list.length}.</p>`
+              : '',
+        },
+      );
       pending();
     };
     $('dex-list').onchange = e => {
@@ -4285,8 +4386,16 @@
     dz.classList.remove('drag');
     load(e.dataTransfer.files[0]);
   };
-  $('offline-button').onclick = () => {
+  $('offline-button').onclick = async () => {
+    // The offline editor carries its sprites inside the file.
+    await iconsReady;
     const parsed = new DOMParser().parseFromString(document.documentElement.outerHTML, 'text/html');
+    const icons = parsed.getElementById('pokemon-icons');
+    if (icons.dataset.src && iconsText) {
+      icons.removeAttribute('data-src');
+      icons.textContent = iconsText.replace(/<\/script/gi, '<\\/script');
+    }
+    parsed.querySelectorAll('link[rel="preload"][href^="icons-"]').forEach(e => e.remove());
     parsed.getElementById('welcome').removeAttribute('hidden');
     parsed.getElementById('workspace').setAttribute('hidden', '');
     parsed.getElementById('editor-panel').innerHTML = '';

@@ -2934,3 +2934,10 @@ label.field > span {
   color: var(--muted);
   font-size: 12px;
 }
+/* Long lists: rows off screen skip layout and painting until they are scrolled near. */
+.bag-grid > .bag-item,
+#roster-list > .roster-item,
+.specimen-grid > .specimen-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 52px;
+}
