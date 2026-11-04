@@ -14,7 +14,7 @@ function chunks(png) {
   if (!Buffer.isBuffer(png) || png.length < 33 || !png.subarray(0, 8).equals(SIGNATURE))
     throw new Error('Not a PNG.');
   const out = [];
-  for (let o = 8; o + 12 <= png.length; ) {
+  for (let o = 8; o + 12 <= png.length;) {
     const length = png.readUInt32BE(o);
     const type = png.toString('latin1', o + 4, o + 8);
     if (o + 12 + length > png.length) throw new Error('Truncated PNG chunk.');
