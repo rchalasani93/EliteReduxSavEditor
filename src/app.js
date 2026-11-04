@@ -992,11 +992,11 @@
     for (const r of all)
       for (const t of new Set(catalog.species[r.species].types))
         counts.set(t, (counts.get(t) || 0) + 1);
-    if (finder.show !== '' && !counts.has(+finder.show)) finder.show = '';
+    if (finder.show !== '' && !counts.has(finder.show)) finder.show = '';
     const list =
       finder.show === ''
         ? all
-        : all.filter(r => catalog.species[r.species].types.includes(+finder.show));
+        : all.filter(r => catalog.species[r.species].types.includes(finder.show));
     const pages = Math.max(1, Math.ceil(list.length / SPECIMENS_PER_PAGE));
     finder.page = Math.min(finder.page, pages - 1);
     const shown = list.slice(
@@ -1010,7 +1010,7 @@
           .sort((a, b) => b[1] - a[1])
           .map(
             ([t, n]) =>
-              `<button type="button" data-show-type="${t}" aria-pressed="${String(+finder.show === t && finder.show !== '')}">${html(catalog.types[t])} <small>${n}</small></button>`,
+              `<button type="button" data-show-type="${t}" aria-pressed="${finder.show === t}">${html(catalog.types[t])} <small>${n}</small></button>`,
           )
           .join('')}</div>`
       : '';
@@ -1448,19 +1448,34 @@
           );
         }),
     );
+    // Values read back from the page become checked integers before they reach any state
+    // that markup is built from; anything else is ignored.
+    const intData = (el, key, max) => {
+      const text = el.dataset[key];
+      return /^\d{1,7}$/.test(text) && +text <= max ? +text : null;
+    };
     $('finder-results').onclick = e => {
       const t = e.target;
       const card = t.closest('[data-specimen]');
-      if (card) return openSpecimen(+card.dataset.specimen);
+      if (card) {
+        const id = intData(card, 'specimen', 1e6);
+        return id === null ? undefined : openSpecimen(id);
+      }
       const type = t.closest('[data-show-type]');
       if (type) {
-        finder.show = type.dataset.showType;
+        // '' shows every type; otherwise a type index.
+        const index =
+          type.dataset.showType === '' ? '' : intData(type, 'showType', catalog.types.length - 1);
+        if (index === null) return;
+        finder.show = index;
         finder.page = 0;
         return drawFinderResults();
       }
       const page = t.closest('[data-specimen-page]');
       if (page) {
-        finder.page = Math.max(0, +page.dataset.specimenPage);
+        const n = intData(page, 'specimenPage', 1e6);
+        if (n === null) return;
+        finder.page = n;
         drawFinderResults();
         return $('finder-results').scrollIntoView({ block: 'start' });
       }
@@ -1469,7 +1484,9 @@
       if (!d) return;
       const pick = t.closest('[data-specimen-pid]');
       if (pick) {
-        const r = d.results[+pick.dataset.specimenPid];
+        const index = intData(pick, 'specimenPid', d.results.length - 1);
+        const r = index === null ? null : d.results[index];
+        if (!r) return;
         d.pid = r.pid;
         d.slot = r.slot;
         drawSpecimen();
@@ -1477,7 +1494,9 @@
       }
       const pidPage = t.closest('[data-specimen-pids-page]');
       if (pidPage) {
-        d.page = Math.max(0, +pidPage.dataset.specimenPidsPage);
+        const n = intData(pidPage, 'specimenPidsPage', 1e6);
+        if (n === null) return;
+        d.page = n;
         if (
           d.session &&
           !d.session.complete &&
