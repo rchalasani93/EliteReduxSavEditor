@@ -478,14 +478,15 @@
           `<span class="type" style="--type:${typeColors[i] || '#777'}">${html(catalog.types[i] || 'None')}</span>`,
       )
       .join('');
-  // Each sprite's data is checked and escaped once, then reused however often a list is redrawn.
+  // Each sprite's data is checked once, then reused however often a list is redrawn.
   const iconUrls = new Map();
   function iconUrl(key) {
-    if (!iconUrls.has(key)) iconUrls.set(key, html(ERHtml.pngSource(pokemonIcons[key])));
+    if (!iconUrls.has(key)) iconUrls.set(key, ERHtml.pngSource(pokemonIcons[key]));
     return iconUrls.get(key);
   }
   const iconImage = image =>
-    `<img src="${image}" alt="" width="64" height="64" decoding="async" loading="lazy">`;
+    // Escaped where it is inserted (validated base64 has nothing to escape, so this is cheap).
+    `<img src="${html(image)}" alt="" width="64" height="64" decoding="async" loading="lazy">`;
   function pokemonIcon(species) {
     const image = species?.key ? iconUrl(species.key) : '';
     // A placeholder remembers its species so it can be filled once the sprite file arrives.
