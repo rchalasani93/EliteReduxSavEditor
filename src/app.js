@@ -1005,19 +1005,19 @@
       (finder.page + 1) * SPECIMENS_PER_PAGE,
     );
     const chips = all.length
-      ? `<div class="pocket-chips" data-specimen-types role="group" aria-label="Filter by type"><button type="button" data-show-type="" aria-pressed="${finder.show === ''}">All <small>${all.length}</small></button>${[
+      ? `<div class="pocket-chips" data-specimen-types role="group" aria-label="Filter by type"><button type="button" data-show-type="" aria-pressed="${finder.show === ''}">All <small>${html(all.length)}</small></button>${[
           ...counts,
         ]
           .sort((a, b) => b[1] - a[1])
           .map(
             ([t, n]) =>
-              `<button type="button" data-show-type="${t}" aria-pressed="${finder.show === t}">${html(catalog.types[t])} <small>${n}</small></button>`,
+              `<button type="button" data-show-type="${html(t)}" aria-pressed="${finder.show === t}">${html(catalog.types[t])} <small>${html(n)}</small></button>`,
           )
           .join('')}</div>`
       : '';
     const pager =
       pages > 1
-        ? `<nav class="result-pager" aria-label="Specimen pages"><button type="button" data-specimen-page="${finder.page - 1}" ${finder.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${finder.page + 1} of ${pages}</span><button type="button" data-specimen-page="${finder.page + 1}" ${finder.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></nav>`
+        ? `<nav class="result-pager" aria-label="Specimen pages"><button type="button" data-specimen-page="${html(finder.page - 1)}" ${finder.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${html(finder.page + 1)} of ${html(pages)}</span><button type="button" data-specimen-page="${html(finder.page + 1)}" ${finder.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></nav>`
         : '';
     const root = $('finder-results');
     if (!all.length) {
@@ -1041,7 +1041,7 @@
     const part = name => root.querySelector(`[data-part="${name}"]`);
     setMarkup(
       part('count'),
-      `${all.length.toLocaleString()} found${finder.run?.busy ? ' so far' : ''} · tap one to open it`,
+      `${html(all.length.toLocaleString())} found${finder.run?.busy ? ' so far' : ''} · tap one to open it`,
     );
     setMarkup(part('chips'), chips);
     setMarkup(part('pager-top'), pager);
@@ -1193,22 +1193,22 @@
     setMarkup(
       root.querySelector('[data-part="head"]'),
       `<section class="panel specimen-detail"><div class="specimen-head"><button type="button" class="specimen-back" data-specimen-back>‹ All Pokémon</button></div>
-      <div class="specimen-title">${pokemonIcon(sp)}<div><h2>${html(sp.name)}</h2><p>#${html(sp.dex || sp.id)} · ${html(ERRng.gender(sp, d.pid))} · base stat total ${bst} · PID ${pidHex(d.pid)} · ability slot ${d.slot + 1}</p><div class="types">${typeTags(sp.types)}</div></div></div>
+      <div class="specimen-title">${pokemonIcon(sp)}<div><h2>${html(sp.name)}</h2><p>#${html(sp.dex || sp.id)} · ${html(ERRng.gender(sp, d.pid))} · base stat total ${html(bst)} · PID ${html(pidHex(d.pid))} · ability slot ${html(d.slot + 1)}</p><div class="types">${typeTags(sp.types)}</div></div></div>
       ${abilityCards(preview, sp, true)}
       <div class="form-footer"><p>Enlist creates this Pokémon with this PID: choose its nickname, level, nature, shininess, held item, moves and where it goes.</p><div class="actions-inline"><button type="button" class="primary" data-specimen-enlist ${save.damaged.length ? 'disabled' : ''}>Enlist…</button></div></div></section>`,
     );
     setMarkup(
       root.querySelector('[data-part="pids"]'),
-      `<section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${d.results.length.toLocaleString()}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
+      `<section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${html(d.results.length.toLocaleString())}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
       <div class="specimen-pids">${rows
         .map((r, k) => {
           const picked = r.pid === d.pid && r.slot === d.slot;
-          return `<button type="button" class="result-row${picked ? ' is-selected' : ''}" data-specimen-pid="${first + k}" aria-pressed="${picked}"><code><small>PID</small><br>${pidHex(r.pid)}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>${mark(r.ability)}</b><small>Innates: ${r.innates.map(mark).join(' · ')} · ${html(ERRng.gender(sp, r.pid))}</small></span><span class="result-use">${picked ? 'Shown' : 'Pick'}</span></button>`;
+          return `<button type="button" class="result-row${picked ? ' is-selected' : ''}" data-specimen-pid="${html(first + k)}" aria-pressed="${picked}"><code><small>PID</small><br>${html(pidHex(r.pid))}<br><small>SLOT ${html(r.slot + 1)}</small></code><span class="result-abilities"><b>${mark(r.ability)}</b><small>Innates: ${r.innates.map(mark).join(' · ')} · ${html(ERRng.gender(sp, r.pid))}</small></span><span class="result-use">${picked ? 'Shown' : 'Pick'}</span></button>`;
         })
         .join('')}${!rows.length && s?.busy ? '<p class="field-help">Searching…</p>' : ''}</div>
       ${
         pages > 1 || more
-          ? `<nav class="result-pager" aria-label="PID pages"><button type="button" data-specimen-pids-page="${d.page - 1}" ${d.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${d.page + 1} of ${pages}${more ? '+' : ''}</span><button type="button" data-specimen-pids-page="${d.page + 1}" ${d.page >= pages - 1 && !more ? 'disabled' : ''}>Next ›</button></nav>`
+          ? `<nav class="result-pager" aria-label="PID pages"><button type="button" data-specimen-pids-page="${html(d.page - 1)}" ${d.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${html(d.page + 1)} of ${html(pages)}${more ? '+' : ''}</span><button type="button" data-specimen-pids-page="${html(d.page + 1)}" ${d.page >= pages - 1 && !more ? 'disabled' : ''}>Next ›</button></nav>`
           : ''
       }</section>`,
     );
