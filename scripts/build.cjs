@@ -34,7 +34,7 @@ for (const [marker, file] of [
 // ER_CHANNEL=dev marks the preview build published under /dev/ from the develop branch.
 if (process.env.ER_CHANNEL === 'dev') {
   html = html
-    .replace('<title>Redux Save Studio</title>', '<title>Redux Save Studio (dev)</title>')
+    .replace('<title>Elite Redux Save Editor – Redux Save Studio</title>', '<title>Redux Save Studio (dev)</title>')
     .replace(
       '<meta charset="utf-8" />',
       '<meta charset="utf-8" />\n    <meta name="robots" content="noindex" />',
@@ -75,6 +75,14 @@ fs.mkdirSync(dist, { recursive: true });
 for (const old of fs.readdirSync(dist))
   if (/^icons-[a-f0-9]+\.json$/.test(old)) fs.rmSync(path.join(dist, old));
 fs.writeFileSync(path.join(dist, 'index.html'), hosted);
+// Production gets a sitemap for Google Search Console. The /dev/ preview is noindex, so it has none.
+const sitemap = path.join(dist, 'sitemap.xml');
+if (process.env.ER_CHANNEL === 'dev') fs.rmSync(sitemap, { force: true });
+else
+  fs.writeFileSync(
+    sitemap,
+    '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url>\n    <loc>https://rchalasani93.github.io/EliteReduxSavEditor/</loc>\n  </url>\n</urlset>\n',
+  );
 fs.writeFileSync(path.join(dist, iconsFile), icons);
 fs.writeFileSync(path.join(root, 'Redux Save Studio.html'), standalone);
 const kb = text => Math.round(Buffer.byteLength(text) / 1024);
