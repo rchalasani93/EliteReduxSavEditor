@@ -536,3 +536,41 @@ test('2.65.5.2b data: ROM-checked randomizer config, new species and abilities',
   // The new items carry their bag pocket.
   assert.equal(v5.items[440].pocket, 'mega');
 });
+
+test('Add many and Megas & Primals can create shiny Pokémon', () => {
+  const s = new core.Save(fixture(), catalog);
+  s.createMany(
+    [
+      { species: 25, level: 5, moves: [1], shiny: 1 },
+      { species: 26, level: 5, moves: [1], shiny: 2 },
+      { species: 27, level: 5, moves: [1] },
+    ],
+    { recordDex: false },
+  );
+  const added = s.box(0).filter(m => m.species);
+  assert.deepEqual(
+    added.slice(-3).map(m => [m.species, m.shiny, m.maxShiny]),
+    [
+      [25, 1, 1],
+      [26, 2, 2],
+      [27, 0, 0],
+    ],
+  );
+});
+
+test('trimming the Pokédex unmarks seen-only entries before caught ones', () => {
+  const cat2 = core.applyCatalogPatch(catalog, require('../src/catalog-patches.json')['2.65.5.2b']);
+  const save = new core.Save(fixture(), cat2);
+  const numbers = core.pokedexList(cat2).map(e => e.no);
+  const extra = numbers[500];
+  save.catchInPokedex(numbers.slice(0, 1000).filter(n => n !== extra));
+  // The editor refuses to reach 1,000 seen, so set the seen bit directly, as a game save can.
+  const DEX_SEEN = 2 * 4084 + 0x2e54,
+    at = DEX_SEEN + ((extra - 1) >>> 3);
+  save.write(at, [save.read(at, 1)[0] | (1 << ((extra - 1) & 7))]);
+  assert.deepEqual(save.pokedex().counts(), { seen: 1000, caught: 999 });
+  const removed = save.trimPokedex();
+  assert.deepEqual(removed, [extra]);
+  assert.equal(save.pokedex().caught(numbers[999]), 1);
+  assert.deepEqual(save.pokedex().counts(), { seen: 999, caught: 999 });
+});

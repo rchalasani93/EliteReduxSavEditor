@@ -1,12 +1,26 @@
 const fs = require('node:fs'),
-  path = require('node:path');
+  path = require('node:path'),
+  { createHash } = require('node:crypto');
+const png = require('./png.cjs');
 const root = path.resolve(__dirname, '..');
+// Sprites are stored as the verified original PNGs (src/icons.json) and re-encoded here as
+// indexed PNGs: identical pixels at under a third of the size, so the page loads faster.
+function compactIcons(text) {
+  const icons = JSON.parse(text);
+  for (const [key, value] of Object.entries(icons.images)) {
+    const prefix = 'data:image/png;base64,';
+    if (!value.startsWith(prefix)) throw new Error(`Sprite ${key} is not PNG data.`);
+    icons.images[key] =
+      prefix + png.compact(Buffer.from(value.slice(prefix.length), 'base64')).toString('base64');
+  }
+  return JSON.stringify(icons);
+}
+const icons = compactIcons(fs.readFileSync(path.join(root, 'src/icons.json'), 'utf8'));
 let html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
 for (const [marker, file] of [
   ['STYLES', 'style.css'],
   ['CATALOG', 'catalog.json'],
   ['CATALOG_PATCHES', 'catalog-patches.json'],
-  ['ICONS', 'icons.json'],
   ['CORE', 'core.js'],
   ['RNG', 'rng.js'],
   ['STORY_DATA', 'story.json'],
@@ -41,7 +55,29 @@ if (gaId) {
     `  <script id="analytics-config">window.ER_ANALYTICS = { id: '${gaId}' };</script>\n  </head>`,
   );
 }
-fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
-fs.writeFileSync(path.join(root, 'dist/index.html'), html);
-fs.writeFileSync(path.join(root, 'Redux Save Studio.html'), html);
-console.log(`Built standalone editor (${Math.round(Buffer.byteLength(html) / 1024)} KB).`);
+// The standalone file (and the editor's offline download) carries the sprites inside it. The
+// hosted site serves them as a separate file named by its content hash, so the page shows
+// quickly and the sprites follow in the background; a changed sprite set gets a new name.
+const standalone = html.replace('/* ICONS */', () => icons.replace(/<\/script/gi, '<\\/script'));
+const iconsFile = `icons-${createHash('sha256').update(icons).digest('hex').slice(0, 16)}.json`;
+const hosted = html
+  .replace('/* ICONS */', '{"images":{}}')
+  .replace(
+    '<script id="pokemon-icons" type="application/json">',
+    `<script id="pokemon-icons" type="application/json" data-src="${iconsFile}">`,
+  )
+  .replace(
+    '<meta charset="utf-8" />',
+    `<meta charset="utf-8" />\n    <link rel="preload" href="${iconsFile}" as="fetch" crossorigin="anonymous" />`,
+  );
+const dist = path.join(root, 'dist');
+fs.mkdirSync(dist, { recursive: true });
+for (const old of fs.readdirSync(dist))
+  if (/^icons-[a-f0-9]+\.json$/.test(old)) fs.rmSync(path.join(dist, old));
+fs.writeFileSync(path.join(dist, 'index.html'), hosted);
+fs.writeFileSync(path.join(dist, iconsFile), icons);
+fs.writeFileSync(path.join(root, 'Redux Save Studio.html'), standalone);
+const kb = text => Math.round(Buffer.byteLength(text) / 1024);
+console.log(
+  `Built the editor: site page ${kb(hosted)} KB + sprites ${kb(icons)} KB (${iconsFile}); standalone file ${kb(standalone)} KB.`,
+);

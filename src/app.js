@@ -38,11 +38,45 @@
     worker = null,
     workerUrl = null,
     searchResults = [],
+    searchPage = 0,
     searchSession = null,
     matchMode = 'any',
     toastTimer;
-  const pokemonIcons = JSON.parse($('pokemon-icons').textContent).images,
+  // Ability lab results come in pages of 12; the search keeps running in the background until
+  // ten pages are ready, and the Next button on the last page asks for ten more.
+  const RESULTS_PER_PAGE = 12,
+    PREFETCH_PAGES = 10;
+  const SHININESS = ['Normal', 'Star shiny', 'Square shiny', 'Special palette'];
+  const iconData = $('pokemon-icons'),
+    pokemonIcons = JSON.parse(iconData.textContent).images || {},
     searchDrafts = new Map();
+  // On the hosted site the sprites are a separate file (data-src) so the page itself downloads
+  // and parses quickly; it is fetched in the background and placeholders are filled when it
+  // arrives. The offline editor has them embedded. Only the page's own sprite file is fetched.
+  let iconsText = null;
+  const iconsReady = (() => {
+    const src = iconData.dataset.src || '';
+    if (!/^icons-[a-f0-9]{8,64}\.json$/.test(src)) return Promise.resolve();
+    const signal =
+      typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(60_000) : undefined;
+    return fetch(src, { credentials: 'same-origin', signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`Sprites: HTTP ${r.status}`);
+        return r.text();
+      })
+      .then(text => {
+        if (text.length > 20_000_000) throw new Error('Sprite file is too large.');
+        const data = JSON.parse(text);
+        if (!data || typeof data.images !== 'object') throw new Error('Sprite file is not valid.');
+        for (const [key, value] of Object.entries(data.images))
+          if (/^SPECIES_[A-Z0-9_]+$/.test(key) && typeof value === 'string')
+            pokemonIcons[key] = value;
+        iconsText = text;
+        iconUrls.clear();
+        fillIcons();
+      })
+      .catch(() => {}); // Sprites are decoration: without them the editor shows placeholders.
+  })();
   const typeColors = [
     '#77796a',
     '#ac634c',
@@ -76,6 +110,38 @@
     catalogControlId = 0;
   // Every word of the query must appear, in any order: "primal cascoon" finds Cascoon Primal.
   const matchesQuery = (text, query) => query.split(/\s+/).every(word => text.includes(word));
+  // Run non-urgent work when the browser is idle (or soon, where idle callbacks are missing).
+  const whenIdle = fn =>
+    typeof requestIdleCallback === 'function'
+      ? requestIdleCallback(fn, { timeout: 1500 })
+      : setTimeout(fn, 200);
+  const cancelIdle = id =>
+    typeof cancelIdleCallback === 'function' ? cancelIdleCallback(id) : clearTimeout(id);
+  // Long lists: draw the first rows at once and the rest a batch per frame, so the page responds
+  // straight away. A newer draw of the same container cancels an unfinished one.
+  function renderRows(
+    container,
+    rows,
+    row,
+    { empty = '', after = '', first = 48, batch = 120 } = {},
+  ) {
+    const job = (container._rowsJob = (container._rowsJob || 0) + 1);
+    if (!rows.length) {
+      container.innerHTML = empty;
+      return;
+    }
+    const part = (from, to) =>
+      rows.slice(from, to).map(row).join('') + (to >= rows.length ? after : '');
+    container.innerHTML = part(0, first);
+    let at = first;
+    const next = () => {
+      if (container._rowsJob !== job || !container.isConnected || at >= rows.length) return;
+      container.insertAdjacentHTML('beforeend', part(at, at + batch));
+      at += batch;
+      if (at < rows.length) requestAnimationFrame(next);
+    };
+    if (at < rows.length) requestAnimationFrame(next);
+  }
   const touchLayout = () => window.matchMedia('(max-width: 760px), (any-pointer: coarse)').matches;
   const catalogLabel = kind =>
     ({ species: 'species', moves: 'move', abilities: 'ability', items: 'item' })[kind] || kind;
@@ -183,6 +249,9 @@
       '<div class="dialog-head"><h2 id="catalog-picker-title"></h2><button type="button" class="icon-button" id="close-catalog-picker" aria-label="Close chooser">Close</button></div><label class="field"><span>Search by name or ID</span><input id="catalog-picker-filter" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="search"></label><p id="catalog-picker-count" class="field-help" aria-live="polite"></p><div class="picker-body"><div id="catalog-picker-options"></div></div><button type="button" class="picker-more" id="catalog-picker-more">Show more options</button>';
     dialog.querySelector('h2').textContent = `Choose ${catalogLabel(kind)}`;
     document.body.append(dialog);
+    if (kind === 'moves')
+      dialog.querySelector('label.field > span').textContent =
+        'Search by name, ID, type or category';
     const filter = dialog.querySelector('#catalog-picker-filter'),
       list = dialog.querySelector('#catalog-picker-options'),
       count = dialog.querySelector('#catalog-picker-count'),
@@ -204,7 +273,16 @@
         name.textContent = entry.value.name;
         const no = entry.value.key && ERCore.dexNumber(catalog, entry.value.id);
         detail.textContent = `#${entry.value.id}${no && no !== entry.value.id ? ` · Pokédex #${no}` : ''}${entry.value.desc ? ' · ' + entry.value.desc : ''}`;
-        text.append(name, detail);
+        text.append(name);
+        if (kind === 'moves' && entry.value.id) {
+          // Type tags and the move's numbers, then its short description.
+          const stats = document.createElement('span');
+          stats.className = 'picker-move-stats';
+          stats.innerHTML = moveStats(entry.value);
+          text.append(stats);
+          detail.textContent = `#${entry.value.id}${entry.value.description ? ' · ' + entry.value.description : ''}`;
+        }
+        text.append(detail);
         button.append(text);
         button.onclick = () => {
           closeDialog(dialog);
@@ -315,6 +393,15 @@
       );
     return id;
   }
+  const MOVE_CATEGORIES = [
+    'Physical',
+    'Special',
+    'Status',
+    'Uses the higher attacking stat',
+    'Hits Defense',
+    'Uses the stronger of Physical or Special',
+    'Hits Special Defense',
+  ];
   function buildLists() {
     document.querySelectorAll('datalist').forEach(e => e.remove());
     indexes = {};
@@ -325,7 +412,11 @@
       const entries = Object.values(catalog[kind]).sort((a, b) => a.name.localeCompare(b.name));
       catalogEntries[kind] = entries.map(value => ({
         value,
-        search: `${value.name} ${value.id}`.toLocaleLowerCase(),
+        // Moves can also be found by type and category ("electric special").
+        search: (kind === 'moves' && value.id
+          ? `${value.name} ${value.id} ${(value.types || []).map(t => catalog.types[t]).join(' ')} ${MOVE_CATEGORIES[value.split] || ''}`
+          : `${value.name} ${value.id}`
+        ).toLocaleLowerCase(),
       }));
       if (kind === 'abilities') {
         const banned = new Set(catalog.config.banned);
@@ -337,16 +428,42 @@
             markup: `<button type="button" class="picker-option" data-target-ability="${html(a.id)}"><span><b>${html(a.name)}</b><small>${html(a.desc || 'No description available.')}</small></span><span class="picker-select">Select for search</span></button>`,
           }));
       }
-      list.innerHTML = entries
-        .map(e => {
-          indexes[kind].set(e.name.toLocaleLowerCase(), e.id);
-          indexes[kind].set(display(e).toLocaleLowerCase(), e.id);
-          return `<option value="${html(display(e))}"></option>`;
-        })
+      for (const e of entries) {
+        indexes[kind].set(e.name.toLocaleLowerCase(), e.id);
+        indexes[kind].set(display(e).toLocaleLowerCase(), e.id);
+      }
+    }
+    scheduleDatalists();
+  }
+  // The typed-suggestion lists hold about 5,000 options, so they are built after the page has
+  // painted, or at once when a field that uses them is focused first.
+  let datalistsBuilt = false,
+    datalistJob = 0;
+  function buildDatalists() {
+    cancelIdle(datalistJob);
+    if (datalistsBuilt) return;
+    datalistsBuilt = true;
+    for (const kind of ['species', 'moves', 'abilities', 'items']) {
+      const list = document.createElement('datalist');
+      list.id = `list-${kind}`;
+      list.innerHTML = catalogEntries[kind]
+        .map(({ value: e }) =>
+          // Move suggestions carry their type and numbers as the option label.
+          kind === 'moves' && e.id
+            ? `<option value="${html(display(e))}" label="${html(`${(e.types || []).map(t => catalog.types[t]).join('/')} · ${moveStatsText(e, false)}`)}"></option>`
+            : `<option value="${html(display(e))}"></option>`,
+        )
         .join('');
       document.body.append(list);
     }
   }
+  function scheduleDatalists() {
+    document.querySelectorAll('datalist').forEach(e => e.remove());
+    datalistsBuilt = false;
+    cancelIdle(datalistJob);
+    datalistJob = whenIdle(buildDatalists);
+  }
+  document.addEventListener('focusin', e => e.target.matches?.('input[list]') && buildDatalists());
   buildLists();
   const numberField = (label, name, value, min, max) =>
     `<label class="field"><span>${html(label)}</span><input name="${html(name)}" type="number" value="${html(value)}" min="${html(min)}" max="${html(max)}" required></label>`;
@@ -361,9 +478,27 @@
           `<span class="type" style="--type:${typeColors[i] || '#777'}">${html(catalog.types[i] || 'None')}</span>`,
       )
       .join('');
+  // Each sprite's data is checked once, then reused however often a list is redrawn.
+  const iconUrls = new Map();
+  function iconUrl(key) {
+    if (!iconUrls.has(key)) iconUrls.set(key, ERHtml.pngSource(pokemonIcons[key]));
+    return iconUrls.get(key);
+  }
+  const iconImage = image =>
+    // Escaped where it is inserted (validated base64 has nothing to escape, so this is cheap).
+    `<img src="${html(image)}" alt="" width="64" height="64" decoding="async" loading="lazy">`;
   function pokemonIcon(species) {
-    const image = ERHtml.pngSource(pokemonIcons[species?.key]);
-    return `<span class="mon-emblem" aria-hidden="true">${image ? `<img src="${html(image)}" alt="" width="64" height="64" decoding="async">` : '<span class="unknown-mon-icon"></span>'}</span>`;
+    const image = species?.key ? iconUrl(species.key) : '';
+    // A placeholder remembers its species so it can be filled once the sprite file arrives.
+    return `<span class="mon-emblem" aria-hidden="true">${image ? iconImage(image) : `<span class="unknown-mon-icon"${species?.key && !iconsText && iconData.dataset.src ? ` data-icon="${html(species.key)}"` : ''}></span>`}</span>`;
+  }
+  // Swap placeholders for sprites in place, without redrawing (and losing typing in) any form.
+  function fillIcons() {
+    document.querySelectorAll('.unknown-mon-icon[data-icon]').forEach(el => {
+      const image = iconUrl(el.dataset.icon);
+      if (image) el.outerHTML = iconImage(image);
+      else el.removeAttribute('data-icon');
+    });
   }
   function searchDraft() {
     const key = `${ref?.kind}:${ref?.box ?? ''}:${ref?.slot}`;
@@ -373,6 +508,7 @@
         matchMode: 'any',
         lockSlot: false,
         keepGender: true,
+        shiny: 'keep',
       });
     return searchDrafts.get(key);
   }
@@ -383,6 +519,7 @@
       matchMode: $('match-any-order').checked ? 'any' : 'slots',
       lockSlot: $('lock-slot').checked,
       keepGender: $('keep-gender').checked,
+      shiny: $('apply-shiny').value,
     });
   }
   function options() {
@@ -598,7 +735,7 @@
       $('health-banner').classList.add('warn');
       $('health-banner').insertAdjacentHTML(
         'beforeend',
-        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark the highest ${seenTotal - limit} to keep ${limit}</button></span>`,
+        `<span class="dex-orphans">${seenTotal.toLocaleString()} Pokémon are marked seen. The game's Pokédex crashes at 1,000 or more, because it can only draw three-digit totals. <button type="button" id="trim-dex">Unmark ${seenTotal - limit} to keep ${limit} (seen-only entries first)</button></span>`,
       );
       $('trim-dex').onclick = () => {
         if (!guard()) return;
@@ -606,7 +743,7 @@
         apply(() => (removed = save.trimPokedex()), `Pokédex trimmed to ${limit} seen.`);
         if (removed.length)
           notify(
-            `Pokédex trimmed to ${limit} seen: unmarked #${removed[0]} to #${removed[removed.length - 1]}.`,
+            `Pokédex trimmed to ${limit} seen: unmarked ${removed.length === 1 ? `#${removed[0]}` : `${removed.length} entries, #${removed[removed.length - 1]} to #${removed[0]}`}.`,
           );
       };
     }
@@ -700,6 +837,7 @@
               $('box-select').value = String(box);
             }
             searchResults = [];
+            searchPage = 0;
             rosterOpen = false;
             drawRoster();
             render();
@@ -790,7 +928,24 @@
     bindCatalogPickers();
   }
   // ---- Species finder: every species that can roll a set of abilities ------------------------
-  const finder = { targets: ['', '', '', ''], type: '', minTotal: 0, results: [], run: null };
+  const finder = {
+    targets: ['', '', '', ''],
+    // '' = the active ability may come from any slot; '0'-'2' lock it to that slot.
+    slot: '',
+    type: '',
+    minTotal: 0,
+    results: [],
+    run: null,
+    // Optimal specimen view: results are filtered by type and paged; a card opens a detail page.
+    show: '',
+    page: 0,
+    detail: null,
+    // Card elements by species for the current run, reused across redraws.
+    cards: new Map(),
+  };
+  const SPECIMENS_PER_PAGE = 24,
+    // Ability layouts per worker message in the species search.
+    FINDER_BATCH = 4;
   function finderSpecies() {
     const battleForms = new Set();
     for (const sp of Object.values(catalog.species))
@@ -808,6 +963,8 @@
   function stopFinder() {
     const run = finder.run;
     if (!run) return;
+    run.unlisten?.();
+    clearTimeout(run.resumeTimer);
     run.workers.forEach(w => w.terminate());
     URL.revokeObjectURL(run.url);
     run.busy = false;
@@ -826,23 +983,235 @@
   }
   function drawFinderResults() {
     if (!$('finder-results')) return;
-    const list = finder.results
-      .slice()
-      .sort((a, b) => a.species - b.species)
-      .slice(0, 400);
+    if (finder.detail) return drawSpecimen();
     const name = id => html(catalog.abilities[id]?.name || `#${id}`);
     const wanted = new Set(finder.run?.targets || []);
     const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
-    $('finder-results').innerHTML = list.length
-      ? `<div class="result-heading"><h2>SPECIES THAT CAN HAVE THEM</h2><span>${finder.results.length.toLocaleString()} found${finder.results.length > 400 ? ' · showing the first 400' : ''}</span></div><div class="finder-list">${list
-          .map(r => {
-            const sp = catalog.species[r.species];
-            return `<div class="finder-row">${pokemonIcon(sp)}<div class="finder-main"><b>${html(sp.name)}</b><small>#${html(sp.id)} · ${html(ERRng.gender(sp, r.pid))} · PID ${html(r.pid.toString(16).toUpperCase().padStart(8, '0'))}</small><div class="types">${typeTags(r.types)}</div></div><p class="finder-abilities">Ability ${html(r.slot + 1)}: ${mark(r.ability)}<br>Innates: ${r.innates.map(mark).join(', ')}</p><button type="button" data-finder-add="${html(r.species)}" ${save.damaged.length ? 'disabled' : ''}>Add…</button></div>`;
-          })
+    const all = finder.results.slice().sort((a, b) => a.species - b.species);
+    // Type chips count what was found; the chosen one filters the cards.
+    const counts = new Map();
+    for (const r of all)
+      for (const t of new Set(catalog.species[r.species].types))
+        counts.set(t, (counts.get(t) || 0) + 1);
+    if (finder.show !== '' && !counts.has(finder.show)) finder.show = '';
+    const list =
+      finder.show === ''
+        ? all
+        : all.filter(r => catalog.species[r.species].types.includes(finder.show));
+    const pages = Math.max(1, Math.ceil(list.length / SPECIMENS_PER_PAGE));
+    finder.page = Math.min(finder.page, pages - 1);
+    const shown = list.slice(
+      finder.page * SPECIMENS_PER_PAGE,
+      (finder.page + 1) * SPECIMENS_PER_PAGE,
+    );
+    const chips = all.length
+      ? `<div class="pocket-chips" data-specimen-types role="group" aria-label="Filter by type"><button type="button" data-show-type="" aria-pressed="${finder.show === ''}">All <small>${html(all.length)}</small></button>${[
+          ...counts,
+        ]
+          .sort((a, b) => b[1] - a[1])
+          .map(
+            ([t, n]) =>
+              `<button type="button" data-show-type="${html(t)}" aria-pressed="${finder.show === t}">${html(catalog.types[t])} <small>${html(n)}</small></button>`,
+          )
           .join('')}</div>`
-      : finder.run && !finder.run.busy && !finder.run.stopped
-        ? '<p class="notice">No species can roll all of these together with the current randomizer settings.</p>'
+      : '';
+    const pager =
+      pages > 1
+        ? `<nav class="result-pager" aria-label="Specimen pages"><button type="button" data-specimen-page="${html(finder.page - 1)}" ${finder.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${html(finder.page + 1)} of ${html(pages)}</span><button type="button" data-specimen-page="${html(finder.page + 1)}" ${finder.page >= pages - 1 ? 'disabled' : ''}>Next ›</button></nav>`
         : '';
+    const root = $('finder-results');
+    if (!all.length) {
+      root.dataset.view = '';
+      return setMarkup(
+        root,
+        finder.run && !finder.run.busy && !finder.run.stopped
+          ? '<p class="notice">No Pokémon can roll all of these together with the current randomizer settings.</p>'
+          : '',
+      );
+    }
+    // Stable parts, each rewritten only when its markup changes. Cards are kept per species
+    // and moved rather than rebuilt, so their sprites are not decoded again on every redraw
+    // (Safari repaints a rebuilt grid of 24 sprites in a few hundred milliseconds).
+    if (root.dataset.view !== 'list') {
+      root.dataset.view = 'list';
+      root._markup = null;
+      root.innerHTML =
+        '<div class="result-heading"><h2>POKÉMON THAT CAN ROLL THEM</h2><span data-part="count"></span></div><div data-part="chips"></div><div data-part="pager-top"></div><div class="specimen-grid" data-part="grid"></div><div data-part="pager-bottom"></div>';
+    }
+    const part = name => root.querySelector(`[data-part="${name}"]`);
+    setMarkup(
+      part('count'),
+      `${html(all.length.toLocaleString())} found${finder.run?.busy ? ' so far' : ''} · tap one to open it`,
+    );
+    setMarkup(part('chips'), chips);
+    setMarkup(part('pager-top'), pager);
+    setMarkup(part('pager-bottom'), pager);
+    const grid = part('grid'),
+      cards = shown.map(r => {
+        let card = finder.cards.get(r.species);
+        if (!card) {
+          const sp = catalog.species[r.species];
+          card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'specimen-card';
+          card.dataset.specimen = r.species;
+          card.innerHTML = `${pokemonIcon(sp)}<span class="specimen-name">${html(sp.name)}</span><span class="types">${typeTags(r.types)}</span><small class="finder-abilities">${mark(r.ability)} · ${r.innates.map(mark).join(' · ')}</small>`;
+          finder.cards.set(r.species, card);
+        }
+        return card;
+      });
+    if (cards.length !== grid.children.length || cards.some((c, i) => grid.children[i] !== c))
+      grid.replaceChildren(...cards);
+  }
+  // Writes markup into an element only when it differs from what was last written there.
+  function setMarkup(el, markup) {
+    if (el._markup === markup) return;
+    el._markup = markup;
+    el.innerHTML = markup;
+  }
+  // ---- Optimal specimen: one Pokémon's page --------------------------------------------------
+  // Its rolls with full descriptions, every other PID that gives the same set (paged, searched
+  // in a worker like the Ability lab), and Enlist, which opens Add Pokémon with that PID.
+  function openSpecimen(speciesId) {
+    const r = finder.results.find(x => x.species === speciesId);
+    if (!r) return;
+    stopSpecimenSearch();
+    finder.detail = {
+      species: speciesId,
+      pid: r.pid,
+      slot: r.slot,
+      results: [{ pid: r.pid, slot: r.slot, ability: r.ability, innates: r.innates }],
+      page: 0,
+      session: null,
+      listScroll: window.scrollY,
+    };
+    drawFinderResults();
+    $('finder-results').scrollIntoView({ block: 'start' });
+    searchSpecimenPids();
+  }
+  function closeSpecimen() {
+    stopSpecimenSearch();
+    const y = finder.detail?.listScroll ?? 0;
+    finder.detail = null;
+    drawFinderResults();
+    window.scrollTo(0, y);
+  }
+  function stopSpecimenSearch() {
+    const s = finder.detail?.session;
+    if (!s) return;
+    s.worker?.terminate();
+    if (s.url) URL.revokeObjectURL(s.url);
+    s.worker = null;
+    s.busy = false;
+    // An unfinished search restarts from where the list stands when the page is shown again.
+    if (!s.complete) finder.detail.session = null;
+  }
+  function searchSpecimenPids() {
+    const d = finder.detail;
+    if (!d || !finder.run) return;
+    let s = d.session;
+    if (!s) {
+      const targets = finder.run.targets.slice(0, 4);
+      while (targets.length < 4) targets.push(null);
+      const code =
+        $('rng-code').textContent +
+        `\nlet pages;self.onmessage=async e=>{try{if(e.data.kind!=='next')pages=ERRng.searchPages(e.data);const page=await pages.next();self.postMessage({kind:'done',value:page.value});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
+      const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      s = d.session = {
+        url,
+        worker: new Worker(url),
+        busy: false,
+        complete: false,
+        target: RESULTS_PER_PAGE * 2,
+        started: false,
+      };
+      const request = {
+        species: catalog.species[d.species],
+        options: finder.run.options,
+        config: catalog.config,
+        targets,
+        matchMode: 'any',
+        lockedSlot: finder.run.lockedSlot ?? null,
+        keepGender: false,
+        pid: d.pid,
+        limit: RESULTS_PER_PAGE,
+      };
+      s.worker.onmessage = e => {
+        if (finder.detail !== d) return;
+        const data = e.data;
+        s.busy = false;
+        if (data.kind === 'error') {
+          stopSpecimenSearch();
+          fail(new Error(data.message));
+          return;
+        }
+        s.complete = data.value.complete;
+        const have = new Set(d.results.map(x => `${x.pid}:${x.slot}`));
+        for (const r of data.value.answers)
+          if (!have.has(`${r.pid}:${r.slot}`))
+            d.results.push({ pid: r.pid, slot: r.slot, ability: r.ability, innates: r.innates });
+        if (s.complete) stopSpecimenSearch();
+        else if (d.results.length < s.target) {
+          s.busy = true;
+          s.worker.postMessage({ kind: 'next' });
+        }
+        drawSpecimen();
+      };
+      s.busy = true;
+      s.worker.postMessage(request);
+      return;
+    }
+    if (!s.busy && !s.complete && s.worker) {
+      s.busy = true;
+      s.worker.postMessage({ kind: 'next' });
+    }
+  }
+  function drawSpecimen() {
+    const d = finder.detail;
+    if (!d || !$('finder-results')) return;
+    const sp = catalog.species[d.species],
+      pidHex = n => n.toString(16).toUpperCase().padStart(8, '0'),
+      bst = sp.base.reduce((a, b) => a + b, 0),
+      wanted = new Set(finder.run?.targets || []),
+      s = d.session,
+      more = !!s && !s.complete,
+      pages = Math.max(1, Math.ceil(d.results.length / RESULTS_PER_PAGE));
+    d.page = Math.min(d.page, Math.max(0, pages - 1 + (more && s.busy ? 1 : 0)));
+    const first = d.page * RESULTS_PER_PAGE,
+      rows = d.results.slice(first, first + RESULTS_PER_PAGE);
+    const preview = { species: d.species, pid: d.pid, abilitySlot: d.slot };
+    const name = id => html(catalog.abilities[id]?.name || `#${id}`);
+    const mark = id => (wanted.has(id) ? `<b>${name(id)}</b>` : name(id));
+    const root = $('finder-results');
+    if (root.dataset.view !== 'detail') {
+      root.dataset.view = 'detail';
+      root._markup = null;
+      root.innerHTML = '<div data-part="head"></div><div data-part="pids"></div>';
+    }
+    // The head (sprite and ability cards) changes only when another PID is picked; the PID
+    // list updates on its own as results arrive.
+    setMarkup(
+      root.querySelector('[data-part="head"]'),
+      `<section class="panel specimen-detail"><div class="specimen-head"><button type="button" class="specimen-back" data-specimen-back>‹ All Pokémon</button></div>
+      <div class="specimen-title">${pokemonIcon(sp)}<div><h2>${html(sp.name)}</h2><p>#${html(sp.dex || sp.id)} · ${html(ERRng.gender(sp, d.pid))} · base stat total ${html(bst)} · PID ${html(pidHex(d.pid))} · ability slot ${html(d.slot + 1)}</p><div class="types">${typeTags(sp.types)}</div></div></div>
+      ${abilityCards(preview, sp, true)}
+      <div class="form-footer"><p>Enlist creates this Pokémon with this PID: choose its nickname, level, nature, shininess, held item, moves and where it goes.</p><div class="actions-inline"><button type="button" class="primary" data-specimen-enlist ${save.damaged.length ? 'disabled' : ''}>Enlist…</button></div></div></section>`,
+    );
+    setMarkup(
+      root.querySelector('[data-part="pids"]'),
+      `<section class="panel"><div class="panel-heading"><h2>OTHER PIDS WITH THIS SET</h2><span>${html(d.results.length.toLocaleString())}${more ? '+' : ''} found${s?.busy ? ' · searching…' : ''}</span></div><p class="field-help" style="margin-top:0">Each keeps your chosen abilities; the other slots differ. Pick one to see it above and enlist it.</p>
+      <div class="specimen-pids">${rows
+        .map((r, k) => {
+          const picked = r.pid === d.pid && r.slot === d.slot;
+          return `<button type="button" class="result-row${picked ? ' is-selected' : ''}" data-specimen-pid="${html(first + k)}" aria-pressed="${picked}"><code><small>PID</small><br>${html(pidHex(r.pid))}<br><small>SLOT ${html(r.slot + 1)}</small></code><span class="result-abilities"><b>${mark(r.ability)}</b><small>Innates: ${r.innates.map(mark).join(' · ')} · ${html(ERRng.gender(sp, r.pid))}</small></span><span class="result-use">${picked ? 'Shown' : 'Pick'}</span></button>`;
+        })
+        .join('')}${!rows.length && s?.busy ? '<p class="field-help">Searching…</p>' : ''}</div>
+      ${
+        pages > 1 || more
+          ? `<nav class="result-pager" aria-label="PID pages"><button type="button" data-specimen-pids-page="${html(d.page - 1)}" ${d.page === 0 ? 'disabled' : ''}>‹ Prev</button><span class="pager-gap">Page ${html(d.page + 1)} of ${html(pages)}${more ? '+' : ''}</span><button type="button" data-specimen-pids-page="${html(d.page + 1)}" ${d.page >= pages - 1 && !more ? 'disabled' : ''}>Next ›</button></nav>`
+          : ''
+      }</section>`,
+    );
   }
   // Worker messages are not trusted for display: keep only the species, PID and slot
   // as checked numbers and recompute the abilities and types here.
@@ -856,7 +1225,8 @@
       !Number.isInteger(pid) ||
       pid < 0 ||
       pid > 0xffffffff ||
-      ![0, 1, 2].includes(slot)
+      ![0, 1, 2].includes(slot) ||
+      (finder.run.lockedSlot !== null && slot !== finder.run.lockedSlot)
     )
       return null;
     const result = ERRng.evaluate(
@@ -873,14 +1243,14 @@
     return { species, pid, slot, ...result };
   }
   let finderDrawTimer = 0;
-  // Pages arrive once per layout; redraw at most a few times a second.
+  // Pages arrive once per layout; redraw at most about once a second while searching.
   function scheduleFinderDraw() {
     if (finderDrawTimer) return;
     finderDrawTimer = setTimeout(() => {
       finderDrawTimer = 0;
       drawFinderResults();
       finderStatus();
-    }, 250);
+    }, 800);
   }
   function startFinder() {
     try {
@@ -894,42 +1264,120 @@
         $('rng-code').textContent +
         `\nself.onmessage=async e=>{try{for await(const page of ERRng.findSpecies(e.data))self.postMessage({kind:'page',value:page});self.postMessage({kind:'end'});}catch(error){self.postMessage({kind:'error',message:error.message});}};`;
       const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
-      const count = Math.max(
+      // Layouts are handed out a few at a time, so the search can give way to the page:
+      // no new batches start while you scroll, tap or type, and fewer workers run when frames
+      // start to stall (a batch takes a fraction of a second, so either takes effect quickly).
+      const max = Math.max(
         1,
-        Math.min(8, (navigator.hardwareConcurrency || 4) - 1, groups.length),
+        Math.min(
+          6,
+          (navigator.hardwareConcurrency || 4) - 1,
+          Math.ceil(groups.length / FINDER_BATCH),
+        ),
       );
+      const lockedSlot = finder.slot === '' ? null : +finder.slot;
       const run = {
         targets,
+        lockedSlot,
         options: opts,
         url,
         workers: [],
         total: groups.length,
         done: 0,
-        finished: 0,
         busy: true,
         stopped: false,
         started: performance.now(),
         ended: 0,
+        next: 0,
+        active: 0,
+        limit: max,
+        max,
+        pausedUntil: 0,
+        resumeTimer: 0,
+        unlisten: () => {},
       };
+      const request = {
+        options: opts,
+        config: catalog.config,
+        targets,
+        lockedSlot,
+        pid: crypto.getRandomValues(new Uint32Array(1))[0],
+      };
+      stopSpecimenSearch();
       finder.run = run;
       finder.results = [];
-      for (let i = 0; i < count; i++) {
+      finder.cards = new Map();
+      finder.detail = null;
+      finder.show = '';
+      finder.page = 0;
+      const finish = () => {
+        run.busy = false;
+        run.ended = performance.now();
+        stopFinder();
+        scheduleFinderDraw();
+      };
+      const feed = worker => {
+        if (finder.run !== run || !run.busy) return;
+        worker.idle = true;
+        if (run.next >= groups.length) {
+          if (!run.active) finish();
+          return;
+        }
+        if (performance.now() < run.pausedUntil || run.active >= run.limit) return;
+        worker.idle = false;
+        run.active++;
+        const batch = groups.slice(run.next, run.next + FINDER_BATCH);
+        run.next += batch.length;
+        worker.postMessage({ ...request, groups: batch });
+      };
+      const resume = () => run.workers.filter(w => w.idle).forEach(feed);
+      // Any interaction holds back new batches briefly.
+      const hold = () => {
+        run.pausedUntil = performance.now() + 600;
+        clearTimeout(run.resumeTimer);
+        run.resumeTimer = setTimeout(resume, 620);
+      };
+      const events = ['pointerdown', 'touchstart', 'touchmove', 'wheel', 'keydown', 'scroll'];
+      events.forEach(type => window.addEventListener(type, hold, { passive: true, capture: true }));
+      run.unlisten = () =>
+        events.forEach(type => window.removeEventListener(type, hold, { capture: true }));
+      // Frame watch: two or more frames over 100 ms in a second drop a worker; three smooth
+      // seconds add one back.
+      let last = performance.now(),
+        windowStart = last,
+        slow = 0,
+        smooth = 0;
+      const watch = now => {
+        if (finder.run !== run || !run.busy) return;
+        if (!document.hidden && now - last > 100) slow++;
+        last = now;
+        if (now - windowStart >= 1000) {
+          if (slow >= 2 && run.limit > 1) {
+            run.limit--;
+            smooth = 0;
+          } else if (!slow && ++smooth >= 3 && run.limit < run.max) {
+            run.limit++;
+            smooth = 0;
+            resume();
+          }
+          slow = 0;
+          windowStart = now;
+        }
+        requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+      for (let i = 0; i < max; i++) {
         const worker = new Worker(url);
         worker.onmessage = e => {
           if (finder.run !== run) return;
           const data = e.data;
           if (data.kind === 'page') {
             run.done++;
-            if (data.value.found.length) {
+            if (data.value.found.length)
               finder.results.push(...data.value.found.map(trustedFinderResult).filter(Boolean));
-              scheduleFinderDraw();
-            }
           } else if (data.kind === 'end') {
-            if (++run.finished === count) {
-              run.busy = false;
-              run.ended = performance.now();
-              stopFinder();
-            }
+            run.active--;
+            feed(worker);
           } else {
             run.ended = performance.now();
             stopFinder();
@@ -944,16 +1392,10 @@
           finderStatus();
           fail(new Error(e.message || 'Species search failed.'));
         };
+        worker.idle = true;
         run.workers.push(worker);
-        // Round-robin so every worker gets a similar mix of easy and hard layouts.
-        worker.postMessage({
-          groups: groups.filter((_, n) => n % count === i),
-          options: opts,
-          config: catalog.config,
-          targets,
-          pid: crypto.getRandomValues(new Uint32Array(1))[0],
-        });
       }
+      resume();
       drawFinderResults();
       finderStatus();
     } catch (e) {
@@ -964,7 +1406,11 @@
     const opts = options(),
       on = opts.abilityRng || opts.innateRng;
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Species finder.</h1><p>Pick up to four abilities and innates and see every species that can have all of them at once, with a PID that does it.</p></div>${on ? `<p class="notice">Your save has the ${opts.abilityRng && opts.innateRng ? 'ability and innate randomizers' : opts.abilityRng ? 'ability randomizer' : 'innate randomizer'} on, so most species can roll most combinations. One or two abilities take seconds; three or four can take a few minutes, and results appear as they are found.</p>` : '<p class="notice">Ability and innate randomizers are off in this save, so this lists the species that have these abilities naturally.</p>'}
+      `<div class="page-heading"><h1>Optimal specimen.</h1><p>Pick up to four abilities and innates and see every Pokémon that can roll all of them at once. Open one for its rolls and every PID that gives them, then enlist it into your party or a box.</p></div>${
+        opts.abilityRng && opts.innateRng
+          ? '<p class="notice">Your save has the ability and innate randomizers on, so most Pokémon can roll most combinations. One or two abilities take a second or two, three take seconds, and four can take a minute on a phone; results appear as they are found.</p>'
+          : `<div class="notice warning randomizer-off"><p>${on ? `Only the ${opts.abilityRng ? 'ability' : 'innate'} randomizer is on in this save` : 'The ability and innate randomizers are off in this save'}, so ${on ? 'fewer Pokémon can roll these' : 'this lists only the Pokémon that have these abilities naturally'}. Both are game options; turn them on here to match a randomized run.</p><div class="actions-inline">${opts.abilityRng ? '' : `<button type="button" data-enable-rng="abilityRng" ${save.damaged.length ? 'disabled' : ''}>Turn on ability randomizer</button>`}${opts.innateRng ? '' : `<button type="button" data-enable-rng="innateRng" ${save.damaged.length ? 'disabled' : ''}>Turn on innate randomizer</button>`}</div></div>`
+      }
     <section class="panel"><div class="panel-heading"><h2>WHAT YOU WANT</h2><span>Any order · abilities and innates</span></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span>Ability ${i + 1}</span><input id="finder-target-${i}" list="list-abilities" placeholder="${i ? 'Optional' : 'Required'}" autocomplete="off"></label>`).join('')}</div>
     <div class="field-grid" style="margin-top:16px"><label class="field"><span>Type</span><select id="finder-type"><option value="">Any type</option>${catalog.types
       .map((t, i) =>
@@ -974,10 +1420,12 @@
       )
       .join(
         '',
-      )}</select></label>${numberField('Minimum base stat total', 'finderMin', finder.minTotal, 0, 1000)}<span></span></div>
+      )}</select></label>${numberField('Minimum base stat total', 'finderMin', finder.minTotal, 0, 1000)}<label class="field"><span>Ability slot</span><select id="finder-slot"><option value="">Any slot</option><option value="0">Slot 1 only</option><option value="1">Slot 2 only</option><option value="2">Slot 3 only</option></select></label></div>
     <div class="search-control"><button id="finder-start" class="primary" ${save.damaged.length ? 'disabled' : ''}>Find species</button><button id="finder-stop" hidden>Stop</button></div><div class="search-progress" id="finder-progress" aria-live="polite"></div><progress id="finder-meter" max="100" value="0" hidden></progress></section><div id="finder-results"></div>`;
     finder.targets.forEach((t, i) => ($('finder-target-' + i).value = t));
     $('finder-type').value = finder.type;
+    $('finder-slot').value = finder.slot;
+    $('finder-slot').onchange = e => (finder.slot = e.target.value);
     const minInput = document.querySelector('[name="finderMin"]');
     minInput.id = 'finder-min';
     for (let i = 0; i < 4; i++)
@@ -991,26 +1439,103 @@
       finderStatus();
       drawFinderResults();
     };
+    document.querySelectorAll('[data-enable-rng]').forEach(
+      b =>
+        (b.onclick = () => {
+          if (!guard()) return;
+          apply(
+            () => save.editOptions({ [b.dataset.enableRng]: 1 }),
+            `${b.dataset.enableRng === 'abilityRng' ? 'Ability' : 'Innate'} randomizer turned on. Search again to use it.`,
+          );
+        }),
+    );
+    // Values read back from the page become checked integers before they reach any state
+    // that markup is built from; anything else is ignored.
+    const intData = (el, key, max) => {
+      const text = el.dataset[key];
+      return /^\d{1,7}$/.test(text) && +text <= max ? +text : null;
+    };
     $('finder-results').onclick = e => {
-      const button = e.target.closest('[data-finder-add]');
-      if (!button) return;
-      const r = finder.results.find(x => x.species === +button.dataset.finderAdd);
-      if (r) openAddDialog({ species: r.species, pid: r.pid, abilitySlot: r.slot });
+      const t = e.target;
+      const card = t.closest('[data-specimen]');
+      if (card) {
+        const id = intData(card, 'specimen', 1e6);
+        return id === null ? undefined : openSpecimen(id);
+      }
+      const type = t.closest('[data-show-type]');
+      if (type) {
+        // '' shows every type; otherwise a type index.
+        const index =
+          type.dataset.showType === '' ? '' : intData(type, 'showType', catalog.types.length - 1);
+        if (index === null) return;
+        finder.show = index;
+        finder.page = 0;
+        return drawFinderResults();
+      }
+      const page = t.closest('[data-specimen-page]');
+      if (page) {
+        const n = intData(page, 'specimenPage', 1e6);
+        if (n === null) return;
+        finder.page = n;
+        drawFinderResults();
+        return $('finder-results').scrollIntoView({ block: 'start' });
+      }
+      if (t.closest('[data-specimen-back]')) return closeSpecimen();
+      const d = finder.detail;
+      if (!d) return;
+      const pick = t.closest('[data-specimen-pid]');
+      if (pick) {
+        const index = intData(pick, 'specimenPid', d.results.length - 1);
+        const r = index === null ? null : d.results[index];
+        if (!r) return;
+        d.pid = r.pid;
+        d.slot = r.slot;
+        drawSpecimen();
+        return document.querySelector('.specimen-detail').scrollIntoView({ block: 'start' });
+      }
+      const pidPage = t.closest('[data-specimen-pids-page]');
+      if (pidPage) {
+        const n = intData(pidPage, 'specimenPidsPage', 1e6);
+        if (n === null) return;
+        d.page = n;
+        if (
+          d.session &&
+          !d.session.complete &&
+          (d.page + 2) * RESULTS_PER_PAGE > d.results.length
+        ) {
+          // Keep one page ready beyond the one shown; searching further ahead only costs CPU.
+          d.session.target = Math.max(d.session.target, (d.page + 2) * RESULTS_PER_PAGE);
+          searchSpecimenPids();
+        }
+        return drawSpecimen();
+      }
+      if (t.closest('[data-specimen-enlist]'))
+        openAddDialog({ species: d.species, pid: d.pid, abilitySlot: d.slot });
     };
     drawFinderResults();
     finderStatus();
+    if (finder.detail && !finder.detail.session) searchSpecimenPids();
   }
   // ---- Move details ----------------------------------------------------------------------------
   const openMoveDetails = new Set();
-  const MOVE_CATEGORIES = [
-    'Physical',
-    'Special',
-    'Status',
-    'Uses the higher attacking stat',
-    'Hits Defense',
-    'Uses the stronger of Physical or Special',
-    'Hits Special Defense',
-  ];
+  // One line of a move's numbers: category, power, accuracy and PP.
+  function moveStatsText(move, pp = true) {
+    if (!move || !move.id) return '';
+    const parts = [
+      MOVE_CATEGORIES[move.split] || '',
+      move.power ? `${move.power} power` : 'No power',
+      move.accuracy === undefined
+        ? ''
+        : move.accuracy
+          ? `${move.accuracy}% accuracy`
+          : 'Never misses',
+      pp ? `${ERCore.maxPP(move)} max PP` : '',
+    ];
+    return parts.filter(Boolean).join(' · ');
+  }
+  // Type tags plus the stats line, as shown under a move field.
+  const moveStats = move =>
+    move && move.id ? `${typeTags(move.types)}<span>${html(moveStatsText(move))}</span>` : '';
   function moveDetails(move) {
     if (!move || !move.id) return '<p class="field-help">No move in this slot.</p>';
     const rows = [
@@ -1073,7 +1598,7 @@
       `${heading(m)}${monActions()}<nav class="jump-links" aria-label="Jump to a section"><button type="button" data-jump="pokemon-abilities">Abilities</button><button type="button" data-jump="identity-panel">Details</button><button type="button" data-jump="stats-panel">Stats & EVs</button><button type="button" data-jump="moves-panel">Moves</button><button type="button" data-jump="more-details">More details</button></nav><div class="ability-overview" id="pokemon-abilities">${abilityCards(m)}</div><form id="pokemon-form"><fieldset ${save.damaged.length ? 'disabled' : ''} style="border:0;padding:0;margin:0">
     <section class="panel" id="identity-panel"><div class="panel-heading"><h2>IDENTITY & DETAILS</h2><span>PID ${m.pid.toString(16).toUpperCase().padStart(8, '0')}</span></div><div class="field-grid">
     ${catalogField('Species', 'species', 'species', m.species)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" value="${html(m.nickname)}" maxlength="12" required></label>${numberField(`Level · current cap ${save.cap()}`, 'level', m.level, 1, 100)}
-    ${selectField('Nature', 'nature', m.nature, catalog.natures)}${catalogField('Held item', 'heldItem', 'items', m.heldItem)}${selectField(
+    ${selectField('Shininess', 'shiny', m.shiny, SHININESS)}${selectField('Nature', 'nature', m.nature, catalog.natures)}${catalogField('Held item', 'heldItem', 'items', m.heldItem)}${selectField(
       'Equipped ability',
       'abilitySlot',
       m.abilitySlot,
@@ -1081,14 +1606,14 @@
         (id, i) => `Slot ${i + 1}: ${catalog.abilities[id]?.name || `#${id}`}`,
       ),
     )}
-    ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}${selectField('Shininess', 'shiny', m.shiny, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}
+    ${numberField('Friendship', 'friendship', m.friendship, 0, 255)}${selectField('Poké Ball', 'ball', m.ball, ballNames())}
     </div><p class="field-help" id="held-item-desc">${heldItemText(m.heldItem)}</p><p class="field-help">Species or PID changes can alter randomized abilities. Level changes write experience and refresh party stats.</p></section>
     ${ref.kind === 'party' ? conditionPanel(m) : ''}
     <div class="two-columns"><section class="panel" id="stats-panel"><div class="panel-heading"><h2>STATS & EVS</h2><span>IVs are fixed at 31 in Redux</span></div><table class="stat-table"><thead><tr><th>STAT</th><th>BASE</th><th></th><th>IV</th><th>EV</th><th>FINAL</th></tr></thead><tbody>${statLabels.map((label, i) => `<tr><td>${label}</td><td>${html(s.base[i])}</td><td><div class="stat-bar"><i style="width:${Math.min(100, s.base[i] / 2.55)}%"></i></div></td><td>${(options().difficulty === 3 && save.flag(2893)) || (i === 5 && m.speedDown) ? 0 : 31}</td><td><input type="number" name="ev${i}" aria-label="${label} EV" value="${m.evs[i]}" min="0" max="252" required></td><td>${stats[i]}</td></tr>`).join('')}</tbody></table><div class="form-footer"><span id="ev-total" class="ev-total">${m.evs.reduce((a, b) => a + b, 0)} / 510 EVs</span><div class="actions-inline"><button type="button" data-ev="physical">Physical</button><button type="button" data-ev="special">Special</button><button type="button" data-ev="reset">Clear</button></div></div><p class="field-help">EVs ${options().enableEvs ? 'enabled' : 'disabled in this save'}. Final stats are calculated for the current build. ${ref.kind === 'party' ? `HP ${m.hp}/${m.stats[0]}.` : 'Box Pokémon recalculate their stats when withdrawn.'}</p></section>
     <section class="panel" id="moves-panel"><div class="panel-heading"><h2>MOVESET</h2><span>${ref.kind === 'party' ? 'MOVE / CURRENT PP' : 'MOVE'}</span></div><div class="moves-list">${m.moves
       .map((id, i) => {
         const move = catalog.moves[id];
-        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${typeTags(move.types)}<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span><button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
+        return `<div class="move-row"><span class="ordinal">0${i + 1}</span><input name="move${i + 1}" list="list-moves" value="${html(display(move))}" autocomplete="off" aria-label="Move ${i + 1}" required>${ref.kind === 'party' ? `<input name="pp${i}" type="number" value="${m.pp[i]}" min="0" max="${html(ERCore.maxPP(move))}" aria-label="Move ${i + 1} PP" required>` : '<span></span>'}<div class="move-meta" id="move-meta-${i}">${moveStats(move)}<button type="button" class="move-toggle" data-move-toggle="${i}" aria-expanded="${openMoveDetails.has(i)}" aria-controls="move-details-${i}">${openMoveDetails.has(i) ? 'Hide details' : 'Details'}</button></div></div><div class="move-details" id="move-details-${i}" ${openMoveDetails.has(i) ? '' : 'hidden'}>${moveDetails(move)}</div>`;
       })
       .join(
         '',
@@ -1129,9 +1654,7 @@
             move = catalog.moves[id];
           const meta = $('move-meta-' + i),
             toggle = meta.querySelector('[data-move-toggle]');
-          meta.innerHTML =
-            typeTags(move.types) +
-            `<span>${move.power ? `${html(move.power)} power · ` : ''}${html(ERCore.maxPP(move))} max PP</span>`;
+          meta.innerHTML = moveStats(move);
           meta.append(toggle);
           $('move-details-' + i).innerHTML = moveDetails(move);
           if (ref.kind === 'party') {
@@ -1521,8 +2044,8 @@
       'Creates a new Pokémon with you as its original trainer.',
       `<div class="tab-switch" role="tablist"><button type="button" role="tab" class="active" data-mode="new">Build</button><button type="button" role="tab" data-mode="import">Paste Showdown set</button></div>
     <form data-pane="new" class="add-form"><div class="field-grid two-up"><label class="field"><span>Species</span><input name="species" list="list-species" value="${html(display(catalog.species[start]))}" autocomplete="off" required></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}
-    <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, ['Normal', 'Star shiny', 'Square shiny', 'Special palette'])}</div>
-    ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label>`).join('')}</div></form>
+    <label class="field"><span>Nature</span><select name="nature"><option value="random">Random</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}<label class="field"><span>Nickname · up to 12 characters</span><input name="nickname" maxlength="12" placeholder="Species name" autocomplete="off"></label><label class="field"><span>Held item</span><input name="heldItem" list="list-items" placeholder="None" autocomplete="off"></label></div>
+    ${found ? '<p class="field-help" data-found-note></p>' : ''}<p class="section-label">Moves · suggested from its learnset</p><div class="field-grid two-up">${[0, 1, 2, 3].map(i => `<div class="move-field"><label class="field"><span>Move ${i + 1}</span><input name="move${i}" list="list-moves" autocomplete="off" placeholder="Empty"></label><div class="move-meta" data-add-move-meta="${i}"></div></div>`).join('')}</div></form>
     <div data-pane="import" hidden><textarea class="set-text" rows="9" placeholder="Garchomp @ Life Orb&#10;Ability: Sand Force&#10;Level: 100&#10;EVs: 252 Atk / 4 SpD / 252 Spe&#10;Jolly Nature&#10;- Earthquake&#10;- Dragon Claw" aria-label="Showdown set"></textarea><p class="field-help" data-import-help>Species, item, level, EVs, nature, shininess, happiness and moves are imported. Abilities come from the PID: if the requested ability is not one of the new Pokémon’s choices, the Ability lab opens with it filled in.</p></div>
     <p class="section-label">Where should it go?</p>${destinationFields()}<div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
     );
@@ -1530,8 +2053,17 @@
       read = bindDestination(dialog, defaultDestination());
     let mode = 'new',
       movesEdited = false;
+    // Type, category, power, accuracy and PP under each move as it is chosen.
+    const showMoveStats = i => {
+      let move = null;
+      try {
+        const value = form.elements[`move${i}`].value.trim();
+        if (value) move = catalog.moves[resolve('moves', value)];
+      } catch {}
+      dialog.querySelector(`[data-add-move-meta="${i}"]`).innerHTML = moveStats(move);
+    };
     const fillMoves = () => {
-      if (movesEdited) return;
+      if (movesEdited) return [0, 1, 2, 3].forEach(showMoveStats);
       try {
         const sp = catalog.species[resolve('species', form.elements.species.value)];
         suggestedMoves(sp)
@@ -1541,6 +2073,7 @@
             (id, i) => (form.elements[`move${i}`].value = id ? display(catalog.moves[id]) : ''),
           );
       } catch {}
+      [0, 1, 2, 3].forEach(showMoveStats);
     };
     fillMoves();
     form.elements.species.addEventListener('change', fillMoves);
@@ -1565,12 +2098,14 @@
         options(),
         catalog.config,
       );
-      note.textContent = `Uses PID ${found.pid.toString(16).toUpperCase().padStart(8, '0')} from the species finder: ${catalog.abilities[r.ability]?.name} with ${r.innates.map(id => catalog.abilities[id]?.name).join(', ')}.`;
+      note.textContent = `Uses PID ${found.pid.toString(16).toUpperCase().padStart(8, '0')} from Optimal specimen: ${catalog.abilities[r.ability]?.name} with ${r.innates.map(id => catalog.abilities[id]?.name).join(', ')}.`;
     };
     foundNote();
     form.elements.species.addEventListener('input', foundNote);
-    for (let i = 0; i < 4; i++)
+    for (let i = 0; i < 4; i++) {
       form.elements[`move${i}`].addEventListener('input', () => (movesEdited = true));
+      form.elements[`move${i}`].addEventListener('change', () => showMoveStats(i));
+    }
     dialog.querySelectorAll('[data-mode]').forEach(
       b =>
         (b.onclick = () => {
@@ -1600,6 +2135,10 @@
             moves,
             shiny: +form.elements.shiny.value,
           };
+          const nickname = form.elements.nickname.value.trim(),
+            heldItem = form.elements.heldItem.value.trim();
+          if (nickname) options.nickname = ERCore.sanitizeName(nickname, 12);
+          if (heldItem) options.heldItem = resolve('items', heldItem);
           if (usesFound())
             Object.assign(options, { pid: found.pid, abilitySlot: found.abilitySlot });
           if (natureValue !== 'random') options.nature = +natureValue;
@@ -1644,7 +2183,7 @@
       <div class="checkrow"><label><input type="checkbox" name="hideOwned" checked> Hide forms already in your party or PC</label></div>
       <div class="actions-inline bag-bulk"><button type="button" data-mega-all>Select shown</button><button type="button" data-mega-none>Clear selection</button></div>
       <div class="bag-grid mega-grid" data-mega-list></div>
-      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      <div class="field-grid two-up">${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}</div>
       <div class="checkrow"><label><input type="checkbox" name="recordDex" checked> Record their base Pokémon in the Pokédex (up to the 999 seen the game can show)</label></div>
       <p class="field-help" data-mega-preview aria-live="polite"></p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add selected</button></div></div>`,
@@ -1737,6 +2276,7 @@
               level,
               moves: suggestedMoves(sp),
               ...(nature === 'random' ? {} : { nature: +nature }),
+              shiny: +form.elements.shiny.value,
             }));
         closeDialog(dialog);
         applyStructural(
@@ -1782,7 +2322,7 @@
     const dialog = openDialog(
       'Add many Pokémon',
       'Puts one of each species into the empty slots of your PC, with you as the original trainer.',
-      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label></div>
+      `<form class="bulk-form"><div class="field-grid two-up"><label class="field"><span>Species</span><select name="source"><option value="caught">Marked caught in your Pokédex (${caughtCount})</option><option value="all">Every species (${entries.length})</option>${hasEvolutions ? `<option value="final">Every final evolution (${finalCount})</option>` : ''}${variants.length ? `<option value="variants">Redux, regional and other forms (${variants.length})</option>` : ''}${battleForms.length ? `<option value="battle">Mega and Primal forms (${battleForms.length})</option>` : ''}${forms.length ? `<option value="everything">Every species and form (${everything.length})</option>` : ''}</select></label>${numberField(`Level · cap ${cap}`, 'level', Math.min(cap, 50), 1, 100)}${numberField('From Pokédex number', 'from', 1, 1, maxNo)}${numberField('To Pokédex number', 'to', maxNo, 1, maxNo)}<label class="field"><span>Start in box</span><select name="box">${Array.from({ length: 26 }, (_, b) => `<option value="${b}">${html(save.boxName(b))} · ${save.box(b).filter(m => m.species).length}/30</option>`).join('')}</select></label><label class="field"><span>Nature</span><select name="nature"><option value="random">Random for each</option>${catalog.natures.map((n, i) => `<option value="${i}">${html(n)}</option>`).join('')}</select></label>${selectField('Shininess', 'shiny', 0, SHININESS)}</div>
       <div class="checkrow"><label><input type="checkbox" name="skipOwned" checked> Skip species already in your party or PC</label><label><input type="checkbox" name="recordDex" checked> Record them in the Pokédex (up to the 999 seen the game can show)</label></div>
       <p class="field-help" data-bulk-preview></p><p class="field-help" data-bulk-battle hidden>Mega and Primal forms normally exist only during battle. Stored as themselves they stay in that form; the game may not expect it everywhere, so test before relying on them.</p><p class="field-help">Moves are picked from each species' learnset, as Add Pokémon suggests. Abilities come from each new PID, so use the Ability lab to change them afterwards. Undo removes them all in one step.</p></form>
       <div class="form-footer"><span></span><div class="actions-inline"><button type="button" data-close>Cancel</button><button type="button" class="primary" data-confirm>Add Pokémon</button></div></div>`,
@@ -1855,6 +2395,7 @@
               level,
               moves: suggestedMoves(sp),
               ...(nature === 'random' ? {} : { nature: +nature }),
+              shiny: +form.elements.shiny.value,
             }));
         closeDialog(dialog);
         let added = 0;
@@ -2122,15 +2663,13 @@
       drawBag();
     };
     const drawBag = () => {
-      const list = shown();
-      $('bag-list').innerHTML = list.length
-        ? list
-            .map(
-              i =>
-                `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"${i.desc ? ` title="${html(i.desc)}"` : ''}><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
-            )
-            .join('')
-        : '<p class="field-help">No items match.</p>';
+      renderRows(
+        $('bag-list'),
+        shown(),
+        i =>
+          `<label class="bag-item${bagDraft.has(i.id) ? ' changed' : ''}"${i.desc ? ` title="${html(i.desc)}"` : ''}><input type="checkbox" data-item="${i.id}" ${isOwned(i.id) ? 'checked' : ''} ${off}><span>${html(i.name)}</span><small>#${i.id}</small></label>`,
+        { empty: '<p class="field-help">No items match.</p>' },
+      );
       pending();
     };
     const setItem = (id, value) => {
@@ -2723,18 +3262,21 @@
     };
     const draw = () => {
       const list = shown();
-      $('dex-list').innerHTML = list.length
-        ? list
-            .slice(0, 600)
-            .map(sp => {
-              const st = stateOf(sp.no);
-              return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
-            })
-            .join('') +
-          (list.length > 600
-            ? `<p class="field-help">Showing 600 of ${list.length}. Search to narrow the list; bulk buttons apply to all ${list.length}.</p>`
-            : '')
-        : '<p class="field-help">No species match.</p>';
+      renderRows(
+        $('dex-list'),
+        list.slice(0, 600),
+        sp => {
+          const st = stateOf(sp.no);
+          return `<div class="bag-item dex-item${dexDraft.has(sp.no) ? ' changed' : ''}${sp.form ? ' dex-form' : ''}"><span>${html(sp.name)}${sp.form ? `<small class="dex-form-of">Form · shares ${html(baseOf.get(sp.no))}'s entry</small>` : ''}</span><small>#${sp.no}</small><select data-dex="${sp.no}" aria-label="${html(sp.name)} Pokédex state" ${off}><option value="none"${st === 'none' ? ' selected' : ''}>Not seen</option><option value="seen"${st === 'seen' ? ' selected' : ''}>Seen</option><option value="caught"${st === 'caught' ? ' selected' : ''}>Caught</option></select></div>`;
+        },
+        {
+          empty: '<p class="field-help">No species match.</p>',
+          after:
+            list.length > 600
+              ? `<p class="field-help">Showing 600 of ${list.length}. Search to narrow the list; bulk buttons apply to all ${list.length}.</p>`
+              : '',
+        },
+      );
       pending();
     };
     $('dex-list').onchange = e => {
@@ -2875,7 +3417,7 @@
     matchMode = draft.matchMode;
     $('editor-panel').innerHTML =
       `${heading(m)}<div class="ability-overview" id="lab-abilities">${abilityCards(m)}</div><p class="notice">Each Pokémon has three ability choices, with one equipped alongside its innates. Choose up to four abilities you want together. Any-order matching can place each one in the equipped ability or any innate slot. Blank inputs leave the remaining abilities unrestricted. Every result is verified against the ${html(catalog.config.modulus)}-outcome randomizer.</p>${!on ? '<p class="notice warning">Ability and innate randomizers are off. Enable the ones you want to change in Game settings before searching.</p>' : ''}
-    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="actions-inline" style="margin-bottom:12px"><button type="button" id="fill-current" ${on ? '' : 'disabled'}>Fill blanks with current abilities</button></div><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
+    <section class="panel"><div class="panel-heading"><h2>FIND YOUR COMBINATION</h2><span>Runs in a background worker</span></div><div class="checkrow" style="margin-top:0;margin-bottom:16px"><label><input id="match-any-order" type="checkbox" ${matchMode === 'any' ? 'checked' : ''}> Match abilities in any order</label></div><div class="target-grid">${[0, 1, 2, 3].map(i => `<label class="field"><span id="target-label-${i}"></span><input id="target-${i}" list="list-abilities" placeholder="Leave blank for any ability" autocomplete="off" ${on ? '' : 'disabled'}></label>`).join('')}</div><p class="field-help" id="match-help"></p><div class="actions-inline" style="margin-bottom:12px"><button type="button" id="fill-current" ${on ? '' : 'disabled'}>Fill blanks with current abilities</button></div><div class="search-control"><button id="search-button" class="primary" ${!on || save.damaged.length ? 'disabled' : ''}>Find combinations</button><button id="cancel-search" hidden>Stop search</button><label><input id="lock-slot" type="checkbox"> Keep ability slot ${m.abilitySlot + 1}</label><label><input id="keep-gender" type="checkbox" checked> Keep gender</label><label class="field apply-shiny"><span>Shininess when applied</span><select id="apply-shiny"><option value="keep">Keep current (${html(SHININESS[m.shiny] || 'Normal')})</option>${SHININESS.map((n, i) => `<option value="${i}">${n}</option>`).join('')}</select></label></div><div class="search-progress" id="search-progress" aria-live="polite"></div><progress id="search-meter" max="100" value="0" hidden></progress></section>
     <div id="search-results"></div><section class="panel"><div class="panel-heading"><h2>PID & FORM PREVIEW</h2><span>Changing PID can change gender and randomized types</span></div><div class="field-grid"><label class="field"><span>PID · hexadecimal</span><input id="pid-input" value="${m.pid.toString(16).toUpperCase().padStart(8, '0')}" maxlength="8" pattern="[0-9A-Fa-f]{1,8}"></label><label class="field"><span>Preview species / Mega form</span><input id="preview-species" list="list-species" value="${html(display(s))}" autocomplete="off"></label><label class="field"><span>Preview ability slot</span><select id="preview-slot">${[0, 1, 2].map(i => `<option value="${i}" ${i === m.abilitySlot ? 'selected' : ''}>Slot ${i + 1}</option>`).join('')}</select></label></div><div class="form-footer"><p>Preview does not change species or PID until you apply a PID.</p><div class="actions-inline"><button id="preview-button">Preview</button><button id="reroll-button" ${save.damaged.length ? 'disabled' : ''}>Reroll PID</button><button id="apply-pid" class="primary" ${save.damaged.length ? 'disabled' : ''}>Apply PID</button></div></div><div id="pid-preview" style="margin-top:16px"></div></section>`;
     const updateMatchLabels = () => {
       for (let i = 0; i < 4; i++)
@@ -2894,6 +3436,7 @@
     for (let i = 0; i < 4; i++) $('target-' + i).value = draft.targets[i];
     $('lock-slot').checked = draft.lockSlot;
     $('keep-gender').checked = draft.keepGender;
+    $('apply-shiny').value = draft.shiny ?? 'keep';
     updateMatchLabels();
     $('match-any-order').onchange = e => {
       matchMode = e.target.checked ? 'any' : 'slots';
@@ -2994,6 +3537,7 @@
   function resetSearch() {
     cancelSearch();
     searchResults = [];
+    searchPage = 0;
     drawResults();
     if ($('search-progress')) $('search-progress').textContent = '';
     if ($('search-meter')) $('search-meter').hidden = true;
@@ -3003,7 +3547,7 @@
     const s = searchSession,
       elapsed = s.elapsed + (s.busy ? performance.now() - s.started : 0);
     $('search-progress').textContent =
-      `${searchResults.length} verified matches loaded · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching for more…' : s.complete ? 'Search complete. All matches loaded.' : 'More matches can be searched below'}`;
+      `${searchResults.length.toLocaleString()} verified matches · ${s.request.matchMode === 'any' ? 'Any order' : 'Exact slots'} · ${s.checked.toLocaleString()} candidates · ${(elapsed / 1000).toFixed(2)}s · ${s.busy ? 'Searching…' : s.complete ? 'Search complete.' : 'Paused: more matches exist'}`;
     $('search-meter').value = s.percent;
   }
   function loadMoreSearch() {
@@ -3052,6 +3596,7 @@
         throw error;
       }
       searchResults = [];
+      searchPage = 0;
       searchSession = {
         request,
         complete: false,
@@ -3060,6 +3605,7 @@
         percent: 0,
         elapsed: 0,
         started: performance.now(),
+        target: RESULTS_PER_PAGE * PREFETCH_PAGES,
       };
       drawResults();
       $('search-button').disabled = true;
@@ -3104,6 +3650,8 @@
           $('cancel-search').hidden = true;
           drawResults();
           searchStatus();
+          // Keep filling pages in the background until the next ten are ready.
+          if (!s.complete && searchResults.length < s.target) loadMoreSearch();
           if (s.complete && !searchResults.length)
             $('search-progress').textContent =
               `Search complete. No matching PID exists for these targets ${request.matchMode === 'any' ? 'in any order' : 'in the exact slots'} with the current slot/gender constraints.`;
@@ -3126,47 +3674,104 @@
   }
   function drawResults() {
     if (!$('search-results')) return;
-    const current = mon();
+    const current = mon(),
+      s = searchSession,
+      loadedPages = Math.ceil(searchResults.length / RESULTS_PER_PAGE),
+      more = !!s && !s.complete;
+    // Stay on a page that exists, unless the next one is still being searched for.
+    if (searchPage >= loadedPages && !(more && s.busy)) searchPage = Math.max(0, loadedPages - 1);
+    const first = searchPage * RESULTS_PER_PAGE,
+      page = searchResults.slice(first, first + RESULTS_PER_PAGE),
+      waiting = !page.length && s?.busy;
+    const total = more
+      ? `${searchResults.length.toLocaleString()}+ matches`
+      : `${searchResults.length.toLocaleString()} match${searchResults.length === 1 ? '' : 'es'}`;
+    const pageCount = Math.max(loadedPages, searchPage + 1);
+    const numbers = [];
+    for (let i = 0; i < pageCount; i++)
+      if (i === 0 || i === pageCount - 1 || Math.abs(i - searchPage) <= 2) numbers.push(i);
+      else if (numbers[numbers.length - 1] !== '…') numbers.push('…');
+    const pager =
+      searchResults.length > RESULTS_PER_PAGE || more
+        ? `<nav class="result-pager" aria-label="Result pages"><button type="button" data-page="prev" ${searchPage === 0 ? 'disabled' : ''} aria-label="Previous page">‹ Prev</button>${numbers
+            .map(n =>
+              n === '…'
+                ? '<span class="pager-gap">…</span>'
+                : `<button type="button" data-page="${n}" aria-current="${n === searchPage ? 'page' : 'false'}" aria-label="Page ${n + 1}">${n + 1}</button>`,
+            )
+            .join(
+              '',
+            )}${more ? '<span class="pager-gap">+</span>' : ''}<button type="button" data-page="next" ${searchPage >= loadedPages - 1 && !more ? 'disabled' : ''} aria-label="Next page">Next ›</button></nav>`
+        : '';
     $('search-results').innerHTML =
-      (searchResults.length
-        ? `<div class="result-heading"><h2>SEARCH MATCHES</h2><span>${searchResults.length.toLocaleString()} loaded · Click a row to apply</span></div>`
-        : searchSession?.busy
+      (searchResults.length || waiting
+        ? `<div class="result-heading"><h2>SEARCH MATCHES</h2><span>${total} · page ${searchPage + 1} of ${pageCount}${more ? '+' : ''} · Click a row to apply</span></div>`
+        : s?.busy
           ? '<div aria-hidden="true">' +
             '<div class="skeleton-row"><span></span><span></span></div>'.repeat(3) +
             '</div>'
           : '') +
-      searchResults
-        .map((r, i) => {
-          const selected = current?.pid === r.pid && current.abilitySlot === r.slot,
-            pid = r.pid.toString(16).toUpperCase().padStart(8, '0');
-          return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' (equipped)' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied' : 'Use this PID'}</span></button>`;
-        })
-        .join('') +
-      (searchSession && !searchSession.complete
-        ? `<div class="result-pagination"><span>${searchResults.length.toLocaleString()} matches loaded. Continue searching for the next batch.</span><button id="more-search" ${searchSession.busy ? 'disabled' : ''}>${searchSession.busy ? 'Searching for more…' : 'Load more matches'}</button></div>`
-        : searchResults.length && searchSession?.complete
-          ? '<p class="field-help">All matching results have been loaded.</p>'
+      pager +
+      (waiting
+        ? '<div aria-hidden="true">' +
+          '<div class="skeleton-row"><span></span><span></span></div>'.repeat(3) +
+          '</div><p class="field-help">Searching for this page…</p>'
+        : page
+            .map((r, k) => {
+              const i = first + k,
+                selected = current?.pid === r.pid && current.abilitySlot === r.slot,
+                pid = r.pid.toString(16).toUpperCase().padStart(8, '0');
+              return `<button type="button" class="result-row${selected ? ' is-selected' : ''}" data-result="${i}" aria-label="Apply match ${i + 1}, PID ${pid}" aria-pressed="${selected}"><code><small>MATCH ${i + 1}</small><br>${pid}<br><small>SLOT ${r.slot + 1}</small></code><span class="result-abilities"><b>Ability choices</b><span class="result-ability-options">${r.abilityChoices.map((id, slot) => `<span class="result-ability-option${slot === r.slot ? ' is-equipped' : ''}" title="${slot === r.slot ? 'Equipped by this result' : 'Alternative ability choice'}">${slot + 1}. ${html(catalog.abilities[id]?.name || id)}${slot === r.slot ? ' (equipped)' : ''}</span>`).join('')}</span><small>Innates: ${r.innates.map(id => html(catalog.abilities[id]?.name || id)).join(' · ')}</small></span><span class="result-use">${selected ? 'Applied' : 'Use this PID'}</span></button>`;
+            })
+            .join('')) +
+      (searchResults.length > RESULTS_PER_PAGE ? pager : '') +
+      (searchResults.length && s?.complete
+        ? `<p class="field-help">All ${searchResults.length.toLocaleString()} matching result${searchResults.length === 1 ? ' is' : 's are'} shown.</p>`
+        : more && !s.busy && searchPage >= loadedPages - 1
+          ? '<p class="field-help">More matches exist. Next searches for ten more pages; add targets to narrow the search.</p>'
           : '');
-    $('more-search')?.addEventListener('click', loadMoreSearch);
+    $('search-results')
+      .querySelectorAll('[data-page]')
+      .forEach(
+        b =>
+          (b.onclick = () => {
+            const want =
+              b.dataset.page === 'prev'
+                ? searchPage - 1
+                : b.dataset.page === 'next'
+                  ? searchPage + 1
+                  : +b.dataset.page;
+            searchPage = Math.max(0, want);
+            // Past the pages found so far: search for ten more.
+            if (more && (searchPage + 1) * RESULTS_PER_PAGE > searchResults.length) {
+              s.target = Math.max(s.target, (searchPage + PREFETCH_PAGES) * RESULTS_PER_PAGE);
+              loadMoreSearch();
+            }
+            drawResults();
+            $('search-results').scrollIntoView({ block: 'nearest' });
+          }),
+      );
     $('search-results')
       .querySelectorAll('[data-result]')
       .forEach(
         e =>
           (e.onclick = () => {
             if (!guard()) return;
-            const r = searchResults[+e.dataset.result];
-            if (mon().pid === r.pid && mon().abilitySlot === r.slot) {
+            const r = searchResults[+e.dataset.result],
+              shinyChoice = $('apply-shiny')?.value ?? 'keep',
+              patch = { pid: r.pid, abilitySlot: r.slot };
+            if (shinyChoice !== 'keep' && +shinyChoice !== mon().shiny) {
+              // Same bookkeeping as the Pokémon form: the game keeps the highest shininess seen.
+              patch.shiny = +shinyChoice;
+              patch.maxShiny = Math.max(mon().maxShiny, patch.shiny);
+            }
+            if (mon().pid === r.pid && mon().abilitySlot === r.slot && patch.shiny === undefined) {
               notify('This PID is already applied.');
               return;
             }
             apply(
-              () =>
-                save.editMon(
-                  ref,
-                  { pid: r.pid, abilitySlot: r.slot },
-                  `Apply ability combination to ${mon().nickname}`,
-                ),
-              'Verified combination applied. Your search is preserved.',
+              () => save.editMon(ref, patch, `Apply ability combination to ${mon().nickname}`),
+              `Verified combination applied${patch.shiny ? `, ${SHININESS[patch.shiny].toLowerCase()}` : ''}. Your search is preserved.`,
               { keepSearch: true },
             );
           }),
@@ -3336,6 +3941,42 @@
     return out;
   }
   // ---- Game version picker ---------------------------------------------------------------------
+  const VERSION_REASONS = {
+    pokemon: 'your Pokémon include species, moves, held items or PP that only that build has',
+    items: 'your bag has items that only that build has',
+    pokedex: 'your Pokédex has entries that only that build has',
+    filename: 'the file name says so',
+    stats: 'your party’s stats match that build',
+  };
+  // Asked when a save holds nothing that only one build has (a new game, say). The last version
+  // used is offered first; closing the question keeps it.
+  function askVersion(candidates) {
+    const order = Object.keys(GAME_VERSIONS).filter(v => candidates.includes(v)),
+      last = rememberedVersion(),
+      preferred = order.includes(last) ? last : order[0],
+      note = preferred === last ? 'last used' : 'newest';
+    return new Promise(resolve => {
+      let chosen = null;
+      const dialog = openDialog(
+        'Which Elite Redux version is this save from?',
+        'Saves don’t record their version, and nothing in this one is unique to a single build.',
+        `<p class="field-help">The version decides every randomized ability and innate, so pick the build you play. You can change it later next to the file name.</p><div class="version-choices">${order
+          .map(
+            v =>
+              `<button type="button" data-version="${html(v)}"${v === preferred ? ' class="primary"' : ''}>${html((GAME_VERSIONS[v] || v).replace(' (latest)', ''))}${v === preferred ? ` <small>· ${note}</small>` : ''}</button>`,
+          )
+          .join('')}</div>`,
+      );
+      dialog.querySelectorAll('[data-version]').forEach(
+        b =>
+          (b.onclick = () => {
+            chosen = b.dataset.version;
+            closeDialog(dialog);
+          }),
+      );
+      dialog.addEventListener('close', () => resolve(chosen || preferred), { once: true });
+    });
+  }
   function bundledVersionOf(data) {
     return Object.keys(bundled).find(v => bundled[v] === data) || null;
   }
@@ -3484,7 +4125,7 @@
       fail(e);
     }
   }
-  async function load(file) {
+  async function load(file, { demo = false } = {}) {
     if (!file) return;
     if (!guard()) {
       $('save-file').value = '';
@@ -3503,24 +4144,29 @@
       const next = new ERCore.Save(await file.arrayBuffer(), catalog);
       // Switch to the build this save most likely comes from (bundled data only).
       let switched = null,
-        unsure = false;
-      if (bundledVersionOf(catalog)) {
-        const guess = ERCore.detectVersion(next, bundled, file.name, {
+        asked = null;
+      if (!demo && bundledVersionOf(catalog)) {
+        const evidence = ERCore.versionEvidence(next, bundled, file.name, {
           '2.65.4.1b': '2.65.4',
           '2.65.5': '2.65.5.2b',
         });
-        unsure = !guess;
-        if (guess && bundled[guess.version] !== catalog) {
-          switched = guess;
-          catalog = next.catalog = bundled[guess.version];
-          buildLists();
-          rememberVersion(guess.version);
+        let version = evidence.version;
+        // Nothing in the save settles it: ask, rather than quietly using the last choice.
+        if (!version && evidence.candidates.length > 1) {
+          version = asked = await askVersion(evidence.candidates);
         }
+        if (version && bundled[version] !== catalog) {
+          if (!asked) switched = evidence;
+          catalog = next.catalog = bundled[version];
+          buildLists();
+        }
+        if (version) rememberVersion(version);
       }
       drawVersionPickers();
       cancelSearch();
       stopFinder();
       finder.results = [];
+      finder.cards = new Map();
       finder.run = null;
       save = next;
       searchDrafts.clear();
@@ -3534,6 +4180,7 @@
       box = 0;
       dirty = false;
       searchResults = [];
+      searchPage = 0;
       $('welcome').hidden = true;
       $('workspace').hidden = false;
       $('filename').textContent = filename;
@@ -3550,15 +4197,9 @@
         save.damaged.length
           ? 'This save has checksum errors; editing is disabled.'
           : switched
-            ? `Save loaded and checked. Switched to Elite Redux ${switched.version} data: ${
-                switched.reason === 'moves'
-                  ? 'your Pokémon know moves that only exist in that build'
-                  : switched.reason === 'filename'
-                    ? 'the file name says so'
-                    : 'your party’s stats match that build'
-              }. Change it next to the file name if that’s wrong.`
-            : unsure
-              ? `Save loaded and checked, using Elite Redux ${bundledVersionOf(catalog)} data. The save doesn’t say which build it comes from, so check Game version next to the file name: randomized abilities depend on it.`
+            ? `Save loaded and checked. Switched to Elite Redux ${switched.version} data: ${VERSION_REASONS[switched.reason] || 'the save matches that build'}. Change it next to the file name if that’s wrong.`
+            : asked
+              ? `Save loaded and checked with Elite Redux ${asked} data. You can change it next to the file name.`
               : 'Save loaded and checked.',
         !!save.damaged.length,
       );
@@ -3575,7 +4216,9 @@
   $('backup-button').onclick = backup;
   $('export-button').onclick = () => exportSave();
   $('demo-button').onclick = () =>
-    load(new File([ERCore.demo(catalog)], 'Demo.sav', { type: 'application/octet-stream' }));
+    load(new File([ERCore.demo(catalog)], 'Demo.sav', { type: 'application/octet-stream' }), {
+      demo: true,
+    });
   $('undo-button').onclick = () => {
     if (guard()) {
       resetSearch();
@@ -3639,7 +4282,10 @@
       (e.onclick = () => {
         if (!guard(() => e.click())) return;
         resetSearch();
-        if (e.dataset.tab !== 'finder') stopFinder();
+        if (e.dataset.tab !== 'finder') {
+          stopFinder();
+          stopSpecimenSearch();
+        }
         tab = e.dataset.tab;
         render();
       }),
@@ -3760,8 +4406,16 @@
     dz.classList.remove('drag');
     load(e.dataTransfer.files[0]);
   };
-  $('offline-button').onclick = () => {
+  $('offline-button').onclick = async () => {
+    // The offline editor carries its sprites inside the file.
+    await iconsReady;
     const parsed = new DOMParser().parseFromString(document.documentElement.outerHTML, 'text/html');
+    const icons = parsed.getElementById('pokemon-icons');
+    if (icons.dataset.src && iconsText) {
+      icons.removeAttribute('data-src');
+      icons.textContent = iconsText.replace(/<\/script/gi, '<\\/script');
+    }
+    parsed.querySelectorAll('link[rel="preload"][href^="icons-"]').forEach(e => e.remove());
     parsed.getElementById('welcome').removeAttribute('hidden');
     parsed.getElementById('workspace').setAttribute('hidden', '');
     parsed.getElementById('editor-panel').innerHTML = '';
