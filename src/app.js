@@ -4068,7 +4068,7 @@
     const count = save.changedBytes(),
       checks = save.report();
     $('editor-panel').innerHTML =
-      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: 131,072 bytes</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>File name</span><input id="export-name" value="${html(exportName())}" maxlength="120" autocomplete="off" spellcheck="false"></label><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? 'Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
+      `<div class="page-heading"><h1>Ready for your next run.</h1><p>Check your changes, download a backup, and export a verified battery save.</p></div><div class="review-stats"><div class="metric"><b>${save.history.length}</b><span>APPLIED OPERATIONS</span></div><div class="metric"><b>${count.toLocaleString()}</b><span>BYTES CHANGED</span></div><div class="metric"><b>${checks.filter(c => c.valid).length}/20</b><span>VALID SAVE SECTIONS</span></div></div><section class="panel"><div class="panel-heading"><h2>CHANGES THIS SESSION</h2><span>Undo is available in the toolbar</span></div>${save.history.length ? save.history.map((s, i) => `<div class="history-item">${String(i + 1).padStart(2, '0')} &nbsp; ${html(s)}</div>`).join('') : '<p class="field-help">No changes yet. An unchanged export is byte-for-byte identical to the original.</p>'}<div class="form-footer"><p>Original: ${html(filename)} · Output: ${save.bytes.length.toLocaleString('en-US')} bytes${save.extra ? ` (128 KB save + ${save.extra} bytes of emulator data kept as-is)` : ''}</p><button id="reset-all" ${!count ? 'disabled' : ''}>Revert all edits</button></div></section><section class="panel"><div class="panel-heading"><h2>EXPORT</h2><span>Full file preserved</span></div><p class="notice">Close your emulator before replacing its save. Rename the downloaded file to match your ROM, then boot normally and choose Continue. An old savestate can overwrite the edited battery save.</p><div class="field-grid"><label class="field"><span>File name</span><input id="export-name" value="${html(exportName())}" maxlength="120" autocomplete="off" spellcheck="false"></label><label class="field"><span>Save extension</span><select id="extension"><option value="sav" ${filename.toLowerCase().endsWith('.sav') ? 'selected' : ''}>.sav</option><option value="srm" ${filename.toLowerCase().endsWith('.srm') ? 'selected' : ''}>.srm</option></select></label><div class="full-width actions-inline"><button id="review-backup">Download original backup</button><button id="review-export" class="primary" ${save.damaged.length ? 'disabled' : ''}>Download verified edited save</button></div></div></section><section class="panel"><div class="panel-heading"><h2>SECTION INTEGRITY</h2><span>Read again from exported bytes</span></div><table class="check-table"><thead><tr><th>SECTION</th><th>PHYSICAL SECTOR</th><th>STORED CHECKSUM</th><th>RESULT</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c.id}</td><td>${c.slot}</td><td><code>${c.stored.toString(16).toUpperCase().padStart(4, '0')}</code></td><td class="${c.valid ? 'ok' : 'bad-text'}">${c.valid ? 'Valid' : 'Failed'}</td></tr>`).join('')}</tbody></table></section>`;
     $('review-backup').onclick = backup;
     $('export-name').oninput = e => (exportBase = e.target.value);
     $('review-export').onclick = () => exportSave($('extension').value);
@@ -4119,7 +4119,9 @@
       const bytes = save.export();
       const suffix = ext || (filename.toLowerCase().endsWith('.srm') ? 'srm' : 'sav');
       download(bytes, `${exportName()}.${suffix}`);
-      notify('Export verified: 20 valid sections, 128 KB.');
+      notify(
+        `Export verified: 20 valid sections, 128 KB${save.extra ? ` + ${save.extra} bytes of emulator data kept` : ''}.`,
+      );
       sync();
     } catch (e) {
       fail(e);
@@ -4131,13 +4133,10 @@
       $('save-file').value = '';
       return;
     }
-    if (file.size !== 131072) {
+    const sizeError = ERCore.checkSaveSize(file.size);
+    if (sizeError) {
       $('save-file').value = '';
-      fail(
-        new Error(
-          'Choose a 128 KB battery save (.sav or .srm). ROMs and savestates are not supported.',
-        ),
-      );
+      fail(new Error(sizeError));
       return;
     }
     try {

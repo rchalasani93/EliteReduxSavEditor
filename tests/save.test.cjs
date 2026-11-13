@@ -121,6 +121,28 @@ test('bad checksums, missing sectors, duplicate sections, mixed counters, old si
   assert.throws(() => new core.Save(b, catalog), /different counters/);
   assert.throws(() => new core.Save(new Uint8Array(65536), catalog), /128 KB/);
 });
+test('saves with an emulator footer (mGBA/RetroArch RTC) load, edit and keep the footer', () => {
+  const base = fixture(),
+    input = new Uint8Array(131088);
+  input.set(base);
+  const footer = Uint8Array.from({ length: 16 }, (_, i) => i * 7 + 1);
+  input.set(footer, 131072);
+  const s = new core.Save(input, catalog);
+  assert.equal(s.extra, 16);
+  assert.deepEqual(s.export(), input);
+  s.editMon(party, { nature: 13 });
+  const out = s.export();
+  assert.equal(out.length, 131088);
+  assert.deepEqual(out.subarray(131072), footer);
+  assert.equal(new core.Save(out, catalog).mon(party).nature, 13);
+});
+test('file sizes outside the battery-save range give a specific reason', () => {
+  assert.equal(core.checkSaveSize(131072), null);
+  assert.equal(core.checkSaveSize(131088), null);
+  assert.match(core.checkSaveSize(65536), /64 KB.*Flash 128K/);
+  assert.match(core.checkSaveSize(16 * 1048576), /16384 KB.*ROM or savestate/);
+  assert.throws(() => new core.Save(new Uint8Array(2 * 1048576), catalog), /too large/);
+});
 test('invalid edits roll back atomically and names support game punctuation', () => {
   const s = new core.Save(fixture(), catalog),
     before = s.bytes.slice();

@@ -7,6 +7,21 @@
   const SECTION = 4096,
     DATA = 4084,
     SIGNATURE = 0x08012025;
+  // The game uses 128 KB of flash. Some emulators append extra data after it (mGBA and RetroArch
+  // add a 16-byte real-time clock footer to .sav/.srm files). That tail is kept untouched on export.
+  const SAVE_SIZE = 131072,
+    MAX_FILE_SIZE = 1048576;
+  function sizeLabel(n) {
+    return n >= 1024 && n % 1024 === 0 ? `${n / 1024} KB` : `${n.toLocaleString('en-US')} bytes`;
+  }
+  // Returns an error message for a file size the editor cannot open, or null if it may be a save.
+  function checkSaveSize(n) {
+    if (n < SAVE_SIZE)
+      return `This file is ${sizeLabel(n)}, smaller than a 128 KB Elite Redux battery save. Set your emulator's save type to Flash 128K (or auto), save in-game again, and use the new file.`;
+    if (n > MAX_FILE_SIZE)
+      return `This file is ${sizeLabel(n)}, too large for a 128 KB battery save. It is probably a ROM or savestate; choose the .sav or .srm file instead.`;
+    return null;
+  }
   // Elite Redux 2.65: SB2=sections 0–1, SB1=2–7, storage=8–19.
   // This game has one save slot across 20 rotating sectors, not vanilla Emerald's two banks.
   const PARTY_START = 2 * DATA + 0x238,
@@ -527,10 +542,10 @@
           ? input
           : input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength),
       ).slice();
-      if (this.original.length !== 131072)
-        throw new Error(
-          'Expected a 128 KB Elite Redux battery save (.sav or .srm). Emulator savestates and other sizes are unsupported.',
-        );
+      const sizeError = checkSaveSize(this.original.length);
+      if (sizeError) throw new Error(sizeError);
+      // Bytes after the 128 KB save (e.g. an emulator's clock footer) are never edited.
+      this.extra = this.original.length - SAVE_SIZE;
       this.catalog = catalog;
       this.bytes = this.original.slice();
       this.undoStack = [];
@@ -1858,6 +1873,10 @@
   }
   return {
     Save,
+    SAVE_SIZE,
+    MAX_FILE_SIZE,
+    checkSaveSize,
+    sizeLabel,
     applyCatalogPatch,
     demo,
     randomInt,
